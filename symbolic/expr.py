@@ -2,21 +2,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Dict, Mapping
+from typing import Dict, Iterable, Mapping, Optional, Tuple
 
 import sympy as sp
 from sympy.parsing.sympy_parser import (
     implicit_multiplication_application,
     parse_expr,
+    rationalize,
     standard_transformations,
 )
 
+from .scalar import scalar_simplify
+
 
 PAULI_ORDER = ("I", "X", "Y", "Z")
-_IDENTITY_SYMBOL = sp.Symbol("Iop", commutative=False)
-_X_SYMBOL = sp.Symbol("Xop", commutative=False)
-_Y_SYMBOL = sp.Symbol("Yop", commutative=False)
-_Z_SYMBOL = sp.Symbol("Zop", commutative=False)
+PauliString = Tuple[str, ...]
 
 _PAULI_PRODUCT = {
     ("I", "I"): (1, "I"),
@@ -38,55 +38,88 @@ _PAULI_PRODUCT = {
 }
 
 
-def _clean_terms(terms: Mapping[str, sp.Expr]) -> Dict[str, sp.Expr]:
-    cleaned: Dict[str, sp.Expr] = {}
-    for pauli, coeff in terms.items():
-        if pauli not in PAULI_ORDER:
-            raise ValueError(f"Unsupported Pauli operator: {pauli!r}")
-        simplified = sp.simplify(coeff)
+def _clean_terms(terms: Mapping[PauliString, sp.Expr], num_qubits: int) -> Dict[PauliString, sp.Expr]:
+    cleaned: Dict[PauliString, sp.Expr] = {}
+    for pauli_string, coeff in terms.items():
+        key = tuple(pauli_string)
+        if len(key) != num_qubits:
+            raise ValueError(f"Pauli string {key!r} has length {len(key)}, expected {num_qubits}")
+        for pauli_op in key:
+            if pauli_op not in PAULI_ORDER:
+                raise ValueError(f"Unsupported Pauli operator: {pauli_op!r}")
+        simplified = scalar_simplify(coeff)
         if simplified != 0:
-            cleaned[pauli] = simplified
+            cleaned[key] = simplified
     return cleaned
 
 
 @dataclass(frozen=True)
 class OpExpr:
-    """A symbolic operator over one system qubit in the Pauli basis."""
+    """A symbolic operator over system qubits in the Pauli-string basis."""
 
-    terms: Mapping[str, sp.Expr]
+    terms: Mapping[PauliString, sp.Expr]
+    num_qubits: int = 1
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "terms", _clean_terms(self.terms))
+        if self.num_qubits < 1:
+            raise ValueError("num_qubits must be at least 1")
+        object.__setattr__(self, "terms", _clean_terms(self.terms, self.num_qubits))
 
     @staticmethod
-    def zero() -> "OpExpr":
-        return OpExpr({})
+    def zero(num_qubits: int = 1) -> "OpExpr":
+        return OpExpr({}, num_qubits=num_qubits)
 
     @staticmethod
-    def identity() -> "OpExpr":
-        return OpExpr({"I": sp.Integer(1)})
+    def identity(num_qubits: int = 1) -> "OpExpr":
+        return OpExpr({_identity_key(num_qubits): sp.Integer(1)}, num_qubits=num_qubits)
 
     @staticmethod
-    def pauli(pauli: str) -> "OpExpr":
-        if pauli not in PAULI_ORDER:
-            raise ValueError(f"Unsupported Pauli operator: {pauli!r}")
-        return OpExpr({pauli: sp.Integer(1)})
+    def pauli(pauli_op: str, index: int = 0, num_qubits: int = 1) -> "OpExpr":
+        if pauli_op not in PAULI_ORDER:
+            raise ValueError(f"Unsupported Pauli operator: {pauli_op!r}")
+        if index < 0 or index >= num_qubits:
+            raise ValueError(f"Pauli index {index} is outside a {num_qubits}-qubit system")
+        key = ["I"] * num_qubits
+        key[index] = pauli_op
+        return OpExpr({tuple(key): sp.Integer(1)}, num_qubits=num_qubits)
+
+    @staticmethod
+    def pauli_string(ops: Iterable[str]) -> "OpExpr":
+        key = tuple(ops)
+        if not key:
+            raise ValueError("Pauli string must contain at least one operator")
+        return OpExpr({key: sp.Integer(1)}, num_qubits=len(key))
 
     def is_zero(self) -> bool:
         return not self.terms
 
     def simplify(self) -> "OpExpr":
-        return OpExpr(self.terms)
+        return OpExpr(self.terms, num_qubits=self.num_qubits)
 
     def scale(self, coeff: sp.Expr) -> "OpExpr":
         coeff = sp.sympify(coeff)
-        return OpExpr({pauli: coeff * value for pauli, value in self.terms.items()})
+        return OpExpr(
+            {pauli_string: coeff * value for pauli_string, value in self.terms.items()},
+            num_qubits=self.num_qubits,
+        )
+
+    def with_num_qubits(self, num_qubits: int) -> "OpExpr":
+        if num_qubits == self.num_qubits:
+            return self
+        if num_qubits < self.num_qubits:
+            raise ValueError(f"Cannot shrink {self.num_qubits}-qubit operator to {num_qubits} qubits")
+        padded_terms = {
+            pauli_string + ("I",) * (num_qubits - self.num_qubits): coeff
+            for pauli_string, coeff in self.terms.items()
+        }
+        return OpExpr(padded_terms, num_qubits=num_qubits)
 
     def __add__(self, other: "OpExpr") -> "OpExpr":
-        terms = dict(self.terms)
-        for pauli, coeff in other.terms.items():
-            terms[pauli] = terms.get(pauli, sp.Integer(0)) + coeff
-        return OpExpr(terms)
+        left, right = _align_exprs(self, other)
+        terms = dict(left.terms)
+        for pauli_string, coeff in right.terms.items():
+            terms[pauli_string] = terms.get(pauli_string, sp.Integer(0)) + coeff
+        return OpExpr(terms, num_qubits=left.num_qubits)
 
     def __sub__(self, other: "OpExpr") -> "OpExpr":
         return self + other.scale(-1)
@@ -95,28 +128,35 @@ class OpExpr:
         return self.scale(-1)
 
     def __mul__(self, other: "OpExpr") -> "OpExpr":
-        terms: Dict[str, sp.Expr] = {}
-        for left_pauli, left_coeff in self.terms.items():
-            for right_pauli, right_coeff in other.terms.items():
-                phase, product = _PAULI_PRODUCT[(left_pauli, right_pauli)]
-                terms[product] = terms.get(product, sp.Integer(0)) + left_coeff * right_coeff * phase
-        return OpExpr(terms)
+        left, right = _align_exprs(self, other)
+        terms: Dict[PauliString, sp.Expr] = {}
+        for left_string, left_coeff in left.terms.items():
+            for right_string, right_coeff in right.terms.items():
+                phase = sp.Integer(1)
+                product = []
+                for left_op, right_op in zip(left_string, right_string):
+                    local_phase, local_product = _PAULI_PRODUCT[(left_op, right_op)]
+                    phase *= local_phase
+                    product.append(local_product)
+                key = tuple(product)
+                terms[key] = terms.get(key, sp.Integer(0)) + left_coeff * right_coeff * phase
+        return OpExpr(terms, num_qubits=left.num_qubits)
 
     def equals(self, other: "OpExpr") -> bool:
         diff = self - other
-        return all(sp.simplify(coeff) == 0 for coeff in diff.terms.values())
+        return all(scalar_simplify(coeff) == 0 for coeff in diff.terms.values())
 
     def __str__(self) -> str:
         if not self.terms:
             return "0"
 
-        ordered = [(pauli, self.terms[pauli]) for pauli in PAULI_ORDER if pauli in self.terms]
+        ordered = [(key, self.terms[key]) for key in sorted(self.terms, key=_sort_key)]
         common = ordered[0][1]
-        if len(ordered) > 1 and all(sp.simplify(coeff - common) == 0 for _, coeff in ordered):
-            inside = " + ".join(pauli for pauli, _ in ordered)
+        if len(ordered) > 1 and all(scalar_simplify(coeff - common) == 0 for _, coeff in ordered):
+            inside = " + ".join(_format_pauli_string(key, self.num_qubits) for key, _ in ordered)
             return _format_common_factor(inside, common)
 
-        pieces = [_format_term(pauli, coeff) for pauli, coeff in ordered]
+        pieces = [_format_term(key, coeff, self.num_qubits) for key, coeff in ordered]
         text = pieces[0]
         for piece in pieces[1:]:
             if piece.startswith("-"):
@@ -129,12 +169,35 @@ class OpExpr:
         return f"OpExpr({self})"
 
 
+def _identity_key(num_qubits: int) -> PauliString:
+    return ("I",) * num_qubits
+
+
+def _align_exprs(left: OpExpr, right: OpExpr) -> Tuple[OpExpr, OpExpr]:
+    num_qubits = max(left.num_qubits, right.num_qubits)
+    return left.with_num_qubits(num_qubits), right.with_num_qubits(num_qubits)
+
+
+def _sort_key(pauli_string: PauliString) -> Tuple[int, ...]:
+    rank = {op: index for index, op in enumerate(PAULI_ORDER)}
+    return tuple(rank[op] for op in pauli_string)
+
+
+def _format_pauli_string(pauli_string: PauliString, num_qubits: int) -> str:
+    active = [(index, op) for index, op in enumerate(pauli_string) if op != "I"]
+    if not active:
+        return "I"
+    if num_qubits == 1:
+        return active[0][1]
+    return " ".join(f"{op}_{index}" for index, op in active)
+
+
 def _format_scalar(coeff: sp.Expr) -> str:
-    return sp.sstr(sp.simplify(coeff))
+    return sp.sstr(scalar_simplify(coeff)).replace("I", "i")
 
 
 def _format_common_factor(inside: str, coeff: sp.Expr) -> str:
-    coeff = sp.simplify(coeff)
+    coeff = scalar_simplify(coeff)
     if coeff == 1:
         return inside
     if coeff == -1:
@@ -146,83 +209,109 @@ def _format_common_factor(inside: str, coeff: sp.Expr) -> str:
     return f"{_format_scalar(coeff)}*({inside})"
 
 
-def _format_term(pauli: str, coeff: sp.Expr) -> str:
-    coeff = sp.simplify(coeff)
+def _format_term(pauli_string: PauliString, coeff: sp.Expr, num_qubits: int) -> str:
+    coeff = scalar_simplify(coeff)
+    body = _format_pauli_string(pauli_string, num_qubits)
     if coeff == 1:
-        return pauli
+        return body
     if coeff == -1:
-        return f"-{pauli}"
+        return f"-{body}"
     if coeff.is_Rational and coeff.p == 1:
-        return f"{pauli}/{coeff.q}"
+        return f"{body}/{coeff.q}"
     if coeff.is_Rational and coeff.p == -1:
-        return f"-{pauli}/{coeff.q}"
-    return f"{_format_scalar(coeff)}*{pauli}"
+        return f"-{body}/{coeff.q}"
+    return f"{_format_factor_scalar(coeff)}*{body}"
 
 
-def zero() -> OpExpr:
-    return OpExpr.zero()
+def _format_factor_scalar(coeff: sp.Expr) -> str:
+    text = _format_scalar(coeff)
+    if coeff.is_Add:
+        return f"({text})"
+    return text
 
 
-def identity() -> OpExpr:
-    return OpExpr.identity()
+def zero(num_qubits: int = 1) -> OpExpr:
+    return OpExpr.zero(num_qubits)
 
 
-def pauli(name: str) -> OpExpr:
-    return OpExpr.pauli(name)
+def identity(num_qubits: int = 1) -> OpExpr:
+    return OpExpr.identity(num_qubits)
 
 
-def parse_operator_expression(text: str) -> OpExpr:
-    """Parse a small Pauli-basis expression such as ``(X + Z)/2``."""
+def pauli(name: str, index: int = 0, num_qubits: int = 1) -> OpExpr:
+    return OpExpr.pauli(name, index=index, num_qubits=num_qubits)
+
+
+def parse_operator_expression(text: str, num_qubits: Optional[int] = None) -> OpExpr:
+    """Parse expressions such as ``(X + Z)/2`` or ``(X0 X1 + Z0 Z1)/2``."""
 
     text = _preprocess_expression(text)
-    local_dict = {
-        "I": _IDENTITY_SYMBOL,
-        "X": _X_SYMBOL,
-        "Y": _Y_SYMBOL,
-        "Z": _Z_SYMBOL,
-        "i": sp.I,
-        "pi": sp.pi,
-        "sqrt": sp.sqrt,
-    }
-    transformations = standard_transformations + (implicit_multiplication_application,)
+    symbols, inferred_num_qubits = _make_local_symbols(text)
+    local_dict = {name: symbol for name, symbol in symbols.items()}
+    local_dict.update({"i": sp.I, "pi": sp.pi, "sqrt": sp.sqrt, "sin": sp.sin, "cos": sp.cos, "exp": sp.exp})
+    transformations = standard_transformations + (implicit_multiplication_application, rationalize)
     parsed = parse_expr(text, local_dict=local_dict, transformations=transformations, evaluate=True)
-    return _sympy_to_op(parsed)
+
+    target_num_qubits = num_qubits or inferred_num_qubits or 1
+    return _sympy_to_op(parsed, symbols, target_num_qubits)
 
 
 def _preprocess_expression(text: str) -> str:
     stripped = text.strip()
     stripped = stripped.replace("^", "**")
+    stripped = re.sub(r"\b([IXYZ])_(\d+)\b", r"\1\2", stripped)
     stripped = re.sub(r"\bi(?=[IXYZ(])", "i*", stripped)
     return stripped
 
 
-def _sympy_to_op(expr: sp.Expr) -> OpExpr:
+def _make_local_symbols(text: str) -> Tuple[Dict[str, sp.Symbol], Optional[int]]:
+    names = set(re.findall(r"\b[IXYZ]\d*\b", text))
+    if not names:
+        names = {"I", "X", "Y", "Z"}
+
+    inferred_indices = []
+    symbols: Dict[str, sp.Symbol] = {}
+    for name in names:
+        symbols[name] = sp.Symbol(f"{name}op", commutative=False)
+        if len(name) > 1:
+            inferred_indices.append(int(name[1:]))
+
+    for base in PAULI_ORDER:
+        symbols.setdefault(base, sp.Symbol(f"{base}op", commutative=False))
+
+    inferred_num_qubits = max(inferred_indices) + 1 if inferred_indices else None
+    return symbols, inferred_num_qubits
+
+
+def _sympy_to_op(expr: sp.Expr, symbols: Mapping[str, sp.Symbol], num_qubits: int) -> OpExpr:
     expr = sp.expand(expr)
-    result = OpExpr.zero()
+    result = OpExpr.zero(num_qubits)
     for term in sp.Add.make_args(expr):
-        result += _sympy_term_to_op(term)
+        result += _sympy_term_to_op(term, symbols, num_qubits)
     return result
 
 
-def _sympy_term_to_op(term: sp.Expr) -> OpExpr:
-    symbols = {
-        _IDENTITY_SYMBOL: "I",
-        _X_SYMBOL: "X",
-        _Y_SYMBOL: "Y",
-        _Z_SYMBOL: "Z",
-    }
+def _sympy_term_to_op(term: sp.Expr, symbols: Mapping[str, sp.Symbol], num_qubits: int) -> OpExpr:
+    symbol_to_pauli = {symbol: _symbol_name_to_pauli(name, num_qubits) for name, symbol in symbols.items()}
 
     coeff = sp.Integer(1)
-    op = OpExpr.identity()
+    op = OpExpr.identity(num_qubits)
     for factor in sp.Mul.make_args(term):
-        if factor in symbols:
-            op = op * OpExpr.pauli(symbols[factor])
-        elif isinstance(factor, sp.Pow) and factor.base in symbols and factor.exp.is_integer:
+        if factor in symbol_to_pauli:
+            op = op * symbol_to_pauli[factor]
+        elif isinstance(factor, sp.Pow) and factor.base in symbol_to_pauli and factor.exp.is_integer:
             exponent = int(factor.exp)
             if exponent < 0:
                 raise ValueError(f"Negative Pauli powers are not supported: {factor}")
             for _ in range(exponent):
-                op = op * OpExpr.pauli(symbols[factor.base])
+                op = op * symbol_to_pauli[factor.base]
         else:
             coeff *= factor
-    return op.scale(coeff)
+    return op.scale(scalar_simplify(coeff))
+
+
+def _symbol_name_to_pauli(name: str, num_qubits: int) -> OpExpr:
+    op = name[0]
+    if len(name) == 1:
+        return OpExpr.pauli(op, index=0, num_qubits=num_qubits)
+    return OpExpr.pauli(op, index=int(name[1:]), num_qubits=num_qubits)

@@ -34,3 +34,16 @@ def test_parse_qasm3_register_and_parameterized_gate():
     assert gates[0].name == "rx"
     assert gates[0].qubits == (0,)
     assert sp.simplify(gates[0].parameter - sp.pi / 2) == 0
+
+
+def test_parse_symbolic_rotation_parameter():
+    gates = parse_qasm_text(
+        """
+        OPENQASM 2.0;
+        qreg q[2];
+        rz(-theta) q[0];
+        """
+    )
+
+    assert gates[0].name == "rz"
+    assert gates[0].parameter == -sp.Symbol("theta")

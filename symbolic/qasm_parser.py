@@ -5,13 +5,9 @@ import re
 from typing import Iterable, List, Optional
 
 import sympy as sp
-from sympy.parsing.sympy_parser import (
-    implicit_multiplication_application,
-    parse_expr,
-    standard_transformations,
-)
 
 from .branch_state import Gate
+from .scalar import parse_scalar
 
 
 _GATE_RE = re.compile(r"^([A-Za-z][A-Za-z0-9_]*)\s*(?:\(([^)]*)\))?\s+(.+);$")
@@ -98,6 +94,4 @@ def _parse_operands(text: str, known_register: Optional[str], line_number: int) 
 
 
 def _parse_parameter(text: str) -> sp.Expr:
-    local_dict = {"pi": sp.pi}
-    transformations = standard_transformations + (implicit_multiplication_application,)
-    return sp.simplify(parse_expr(text, local_dict=local_dict, transformations=transformations, evaluate=True))
+    return parse_scalar(text)
