@@ -19,8 +19,30 @@ Support a small OpenQASM subset:
 - h
 - x
 - z
-- rx
-- ry
-- rz
 - cx
 - cz
+
+Parameterized rotation gates such as `rx`, `ry`, and `rz` are intentionally
+not implemented in the first version.
+
+## Usage
+
+Print only the final symbolic branches:
+
+```bash
+.venv/bin/python -m symbolic.verify examples/lcu_x_plus_z.qasm --expected "(X + Z)/2"
+```
+
+Print every intermediate update:
+
+```bash
+.venv/bin/python -m symbolic.verify examples/lcu_x_plus_z.qasm --expected "(X + Z)/2" --trace
+```
+
+The verifier starts from
+
+\[
+B_0 = I,\quad B_1 = 0
+\]
+
+and verifies the final `B0` branch against the expected top-left block.
