@@ -1,8 +1,9 @@
 from pathlib import Path
 
+import pytest
 import sympy as sp
 
-from symbolic.branch_state import BranchState, Gate
+from symbolic.branch_state import BranchState, Gate, UnsupportedGateError
 from symbolic.expr import parse_operator_expression, pauli
 from symbolic.qasm_parser import parse_qasm_file, parse_qasm_text
 from symbolic.verify import FAIL, PASS, PASS_UP_TO_GLOBAL_PHASE, VerificationResult, format_result, proportional_phase, verify_qasm_file
@@ -141,7 +142,7 @@ def test_verification_status_pass_up_to_global_phase():
     expected = (pauli("X") + pauli("Z")).scale(sp.Rational(1, 2))
     phase = (-1 - sp.I) / sp.sqrt(2)
     actual = expected.scale(phase)
-    result = VerificationResult(final_state=BranchState(actual, pauli("I").scale(0)), trace=[], expected=expected)
+    result = VerificationResult(final_state=BranchState(1, 1, {(0,): actual}), trace=[], expected=expected)
     output = format_result(result)
 
     assert result.success is True
@@ -154,7 +155,7 @@ def test_verification_status_pass_up_to_global_phase():
 def test_proportional_but_non_unit_scale_fails():
     expected = pauli("X") + pauli("Z")
     actual = expected.scale(2)
-    result = VerificationResult(final_state=BranchState(actual, pauli("I").scale(0)), trace=[], expected=expected)
+    result = VerificationResult(final_state=BranchState(1, 1, {(0,): actual}), trace=[], expected=expected)
 
     ok, phase = proportional_phase(actual, expected)
 
@@ -179,3 +180,80 @@ def test_ancilla_rx_and_ry_update_rules():
 
     assert state.b0.equals(pauli("I").scale(sp.cos(theta / 2) ** 2 - sp.I * sp.sin(theta / 2) ** 2))
     assert state.b1.equals(pauli("I").scale(-sp.sin(theta / 2) * sp.cos(theta / 2) - sp.I * sp.sin(theta / 2) * sp.cos(theta / 2)))
+
+
+def test_multi_ancilla_h_gates_create_sparse_bitstring_branches():
+    state = BranchState.initial(num_system_qubits=1, num_ancillas=2)
+    state = state.apply(Gate("h", (0,)), ancillas=(0, 1), systems=(2,))
+    state = state.apply(Gate("h", (1,)), ancillas=(0, 1), systems=(2,))
+
+    expected = pauli("I").scale(sp.Rational(1, 2))
+
+    assert set(state.branches) == {(0, 0), (0, 1), (1, 0), (1, 1)}
+    assert all(branch.equals(expected) for branch in state.branches.values())
+    assert state.top_left().equals(expected)
+
+
+def test_multi_ancilla_trace_output_lists_branch_keys():
+    state = BranchState.initial(num_system_qubits=1, num_ancillas=2)
+    result = VerificationResult(final_state=state, trace=[], expected=pauli("I"), ancilla_qubits=(0, 1), system_qubits=(2,))
+    output = format_result(result, show_trace=True)
+
+    assert "Ancilla qubits:" in output
+    assert "q[1] -> ancilla[1]" in output
+    assert "System qubits:" in output
+    assert "q[2] -> system[0]" in output
+    assert "Final B[00] = I" in output
+
+
+def test_cx_ancilla_to_ancilla_permutes_branch_keys():
+    state = BranchState(2, 1, {(1, 0): pauli("I")})
+    state = state.apply(Gate("cx", (0, 1)), ancillas=(0, 1), systems=(2,))
+
+    assert set(state.branches) == {(1, 1)}
+    assert state.branch((1, 1)).equals(pauli("I"))
+
+
+def test_cz_ancilla_to_ancilla_adds_minus_phase_on_11():
+    state = BranchState(2, 1, {(1, 1): pauli("I"), (1, 0): pauli("X")})
+    state = state.apply(Gate("cz", (0, 1)), ancillas=(0, 1), systems=(2,))
+
+    assert state.branch((1, 1)).equals(pauli("I").scale(-1))
+    assert state.branch((1, 0)).equals(pauli("X"))
+
+
+def test_cx_ancilla_to_system_conditionally_left_multiplies_x():
+    state = BranchState(2, 1, {(0, 0): pauli("I"), (1, 0): pauli("Z")})
+    state = state.apply(Gate("cx", (0, 2)), ancillas=(0, 1), systems=(2,))
+
+    assert state.branch((0, 0)).equals(pauli("I"))
+    assert state.branch((1, 0)).equals(pauli("X") * pauli("Z"))
+
+
+def test_cz_system_ancilla_is_symmetric_conditionally_left_multiplies_z():
+    state = BranchState(2, 1, {(0, 1): pauli("X"), (0, 0): pauli("I")})
+    state = state.apply(Gate("cz", (2, 1)), ancillas=(0, 1), systems=(2,))
+
+    assert state.branch((0, 0)).equals(pauli("I"))
+    assert state.branch((0, 1)).equals(pauli("Z") * pauli("X"))
+
+
+def test_cx_system_to_ancilla_uses_projector_rule():
+    state = BranchState(1, 1, {(0,): pauli("I")})
+    state = state.apply(Gate("cx", (1, 0)), ancillas=(0,), systems=(1,))
+
+    expected_stay = (pauli("I") + pauli("Z")).scale(sp.Rational(1, 2))
+    expected_flip = (pauli("I") - pauli("Z")).scale(sp.Rational(1, 2))
+
+    assert state.branch((0,)).equals(expected_stay)
+    assert state.branch((1,)).equals(expected_flip)
+
+
+def test_system_system_controlled_gates_are_unsupported_in_v04():
+    state = BranchState.initial(num_system_qubits=2, num_ancillas=1)
+
+    with pytest.raises(UnsupportedGateError, match="system-system cx"):
+        state.apply(Gate("cx", (1, 2)), ancillas=(0,), systems=(1, 2))
+
+    with pytest.raises(UnsupportedGateError, match="system-system cz"):
+        state.apply(Gate("cz", (1, 2)), ancillas=(0,), systems=(1, 2))
