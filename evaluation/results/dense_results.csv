@@ -1,0 +1,21 @@
+benchmark_id,kind,family,n_system,n_ancilla,qasm_path,matrix_dim,dense_memory_estimate_mb,runtime_sec,process_maxrss_mb,max_abs_error,status,success,error
+x_plus_z,handwritten,x_plus_z,1,1,benchmarks/handwritten/x_plus_z.qasm,4,0.000244,0.001330708,25.718750,1.110223025e-16,PASS,True,
+xx_plus_zz,handwritten,xx_plus_zz,2,1,benchmarks/handwritten/xx_plus_zz.qasm,8,0.000977,0.001015834,26.281250,1.110223025e-16,PASS,True,
+scaling_xstring_n1,generated,scaling_xstring,1,1,benchmarks/generated/scaling_xstring_n1.qasm,4,0.000244,0.000994584,25.890625,1.110223025e-16,PASS,True,
+scaling_xstring_n2,generated,scaling_xstring,2,1,benchmarks/generated/scaling_xstring_n2.qasm,8,0.000977,0.000945250,26.875000,1.110223025e-16,PASS,True,
+scaling_xstring_n4,generated,scaling_xstring,4,1,benchmarks/generated/scaling_xstring_n4.qasm,32,0.015625,0.000699417,26.578125,1.110223025e-16,PASS,True,
+scaling_xstring_n6,generated,scaling_xstring,6,1,benchmarks/generated/scaling_xstring_n6.qasm,128,0.250000,0.003290875,26.265625,1.110223025e-16,PASS,True,
+scaling_xstring_n8,generated,scaling_xstring,8,1,benchmarks/generated/scaling_xstring_n8.qasm,512,4.000000,0.011110958,36.203125,1.110223025e-16,PASS,True,
+scaling_xstring_n10,generated,scaling_xstring,10,1,benchmarks/generated/scaling_xstring_n10.qasm,2048,64.000000,0.227858916,153.546875,1.110223025e-16,PASS,True,
+scaling_xstring_n12,generated,scaling_xstring,12,1,benchmarks/generated/scaling_xstring_n12.qasm,8192,1024.000000,1.768941958,1948.156250,1.110223025e-16,PASS,True,
+scaling_xstring_n16,generated,scaling_xstring,16,1,benchmarks/generated/scaling_xstring_n16.qasm,131072,262144.000000,,,,SKIPPED,,dense unitary estimate 262144.0 MiB > budget 4096.0 MiB
+scaling_xstring_n20,generated,scaling_xstring,20,1,benchmarks/generated/scaling_xstring_n20.qasm,2097152,67108864.000000,,,,SKIPPED,,dense unitary estimate 67108864.0 MiB > budget 4096.0 MiB
+scaling_xstring_n32,generated,scaling_xstring,32,1,benchmarks/generated/scaling_xstring_n32.qasm,8589934592,1125899906842624.000000,,,,SKIPPED,,dense unitary estimate 1125899906842624.0 MiB > budget 4096.0 MiB
+branch_term_product_m1,generated,branch_term_product,1,1,benchmarks/generated/branch_term_product_m1.qasm,4,0.000244,0.001017125,26.375000,1.110223025e-16,PASS,True,
+branch_term_product_m2,generated,branch_term_product,2,2,benchmarks/generated/branch_term_product_m2.qasm,16,0.003906,0.001027708,26.390625,8.326672685e-17,PASS,True,
+branch_term_product_m3,generated,branch_term_product,3,3,benchmarks/generated/branch_term_product_m3.qasm,64,0.062500,0.001247083,26.656250,5.551115123e-17,PASS,True,
+branch_term_product_m4,generated,branch_term_product,4,4,benchmarks/generated/branch_term_product_m4.qasm,256,1.000000,0.005339166,27.640625,4.163336342e-17,PASS,True,
+branch_term_product_m5,generated,branch_term_product,5,5,benchmarks/generated/branch_term_product_m5.qasm,1024,16.000000,0.109531959,42.203125,2.428612866e-17,PASS,True,
+branch_term_product_m6,generated,branch_term_product,6,6,benchmarks/generated/branch_term_product_m6.qasm,4096,256.000000,1.037198375,283.828125,1.561251128e-17,PASS,True,
+branch_term_product_m7,generated,branch_term_product,7,7,benchmarks/generated/branch_term_product_m7.qasm,16384,4096.000000,19.674957917,3242.156250,8.673617380e-18,PASS,True,
+branch_term_product_m8,generated,branch_term_product,8,8,benchmarks/generated/branch_term_product_m8.qasm,65536,65536.000000,,,,SKIPPED,,dense unitary estimate 65536.0 MiB > budget 4096.0 MiB
