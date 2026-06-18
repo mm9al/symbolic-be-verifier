@@ -47,3 +47,19 @@ def test_parse_symbolic_rotation_parameter():
 
     assert gates[0].name == "rz"
     assert gates[0].parameter == -sp.Symbol("theta")
+
+
+def test_parse_opaque_declarations_are_ignored_and_uh_gates_are_kept():
+    gates = parse_qasm_text(
+        """
+        OPENQASM 2.0;
+        qreg q[3];
+        opaque UH a, s;
+        opaque UHdg a, s;
+        UH q[1], q[2];
+        UHdg q[1], q[2];
+        """
+    )
+
+    assert [gate.name for gate in gates] == ["uh", "uhdg"]
+    assert [gate.qubits for gate in gates] == [(1, 2), (1, 2)]

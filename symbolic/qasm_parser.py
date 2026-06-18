@@ -60,6 +60,7 @@ def _is_ignored_statement(line: str) -> bool:
     return (
         line.startswith("OPENQASM")
         or line.startswith("include")
+        or line.startswith("opaque ")
         or line.startswith("creg ")
         or line.startswith("barrier ")
     )

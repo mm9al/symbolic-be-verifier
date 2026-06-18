@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Mapping, Optional, Sequence, Tuple
+from typing import Dict, Literal, Mapping, Optional, Sequence, Tuple, Union
 
 import sympy as sp
 
 from .expr import OpExpr, identity, pauli, zero
 from .scalar import cos_half, exp_minus_i_half, exp_plus_i_half, sin_half
+from .word_expr import WordExpr, atom as word_atom
 
 
 BranchKey = Tuple[int, ...]
+BranchValue = Union[OpExpr, WordExpr]
+ExpressionKind = Literal["op", "word"]
 
 
 class UnsupportedGateError(ValueError):
@@ -34,7 +37,8 @@ class Gate:
 class BranchState:
     num_ancillas: int
     num_system_qubits: int
-    branches: Mapping[BranchKey, OpExpr]
+    branches: Mapping[BranchKey, BranchValue]
+    expression_kind: ExpressionKind = "op"
 
     def __post_init__(self) -> None:
         if self.num_ancillas < 1:
@@ -42,7 +46,13 @@ class BranchState:
         if self.num_system_qubits < 1:
             raise ValueError("num_system_qubits must be at least 1")
 
-        cleaned: Dict[BranchKey, OpExpr] = {}
+        expression_kind = self.expression_kind
+        for branch in self.branches.values():
+            if isinstance(branch, WordExpr):
+                expression_kind = "word"
+                break
+
+        cleaned: Dict[BranchKey, BranchValue] = {}
         for key, branch in self.branches.items():
             normalized_key = tuple(key)
             if len(normalized_key) != self.num_ancillas:
@@ -51,34 +61,45 @@ class BranchState:
                 )
             if any(bit not in (0, 1) for bit in normalized_key):
                 raise ValueError(f"Branch key must be a bitstring: {normalized_key!r}")
-            normalized_branch = branch.with_num_qubits(self.num_system_qubits)
+            normalized_branch = branch if isinstance(branch, WordExpr) else branch.with_num_qubits(self.num_system_qubits)
             if not normalized_branch.is_zero():
                 cleaned[normalized_key] = normalized_branch
         object.__setattr__(self, "branches", cleaned)
+        object.__setattr__(self, "expression_kind", expression_kind)
 
     @staticmethod
-    def initial(num_system_qubits: int = 1, num_ancillas: int = 1) -> "BranchState":
+    def initial(
+        num_system_qubits: int = 1,
+        num_ancillas: int = 1,
+        *,
+        expression_kind: ExpressionKind = "op",
+    ) -> "BranchState":
         zero_key = (0,) * num_ancillas
-        return BranchState(num_ancillas, num_system_qubits, {zero_key: identity(num_system_qubits)})
+        identity_branch: BranchValue
+        if expression_kind == "word":
+            identity_branch = WordExpr.identity()
+        else:
+            identity_branch = identity(num_system_qubits)
+        return BranchState(num_ancillas, num_system_qubits, {zero_key: identity_branch}, expression_kind=expression_kind)
 
     @property
-    def b0(self) -> OpExpr:
+    def b0(self) -> BranchValue:
         return self.branch((0,))
 
     @property
-    def b1(self) -> OpExpr:
+    def b1(self) -> BranchValue:
         return self.branch((1,))
 
-    def top_left(self) -> OpExpr:
+    def top_left(self) -> BranchValue:
         return self.branch((0,) * self.num_ancillas)
 
-    def branch(self, key: BranchKey) -> OpExpr:
+    def branch(self, key: BranchKey) -> BranchValue:
         if len(key) != self.num_ancillas:
             if self.num_ancillas == 1 and len(key) == 1:
                 pass
             else:
                 raise ValueError(f"Branch key {key!r} does not match {self.num_ancillas} ancillas")
-        return self.branches.get(tuple(key), zero(self.num_system_qubits))
+        return self.branches.get(tuple(key), self._zero())
 
     def apply(
         self,
@@ -147,6 +168,11 @@ class BranchState:
         left_system = _qubit_index(left, systems)
         right_system = _qubit_index(right, systems)
 
+        if name in {"uh", "uhdg"}:
+            if left_ancilla is None or right_system is None:
+                raise UnsupportedGateError(f"{name} must be applied as UH ancilla, system")
+            return self._apply_uh(left_ancilla, dagger=(name == "uhdg"))
+
         if name == "cx":
             if left_ancilla is not None and right_system is not None:
                 gate_op = pauli("X", index=right_system, num_qubits=self.num_system_qubits)
@@ -175,7 +201,7 @@ class BranchState:
         raise UnsupportedGateError(f"Unsupported two-qubit gate: {name}")
 
     def _apply_ancilla_matrix(self, ancilla_index: int, matrix: Tuple[Tuple[sp.Expr, sp.Expr], Tuple[sp.Expr, sp.Expr]]) -> "BranchState":
-        new: Dict[BranchKey, OpExpr] = {}
+        new: Dict[BranchKey, BranchValue] = {}
         processed = set()
         relevant_keys = set(self.branches)
         relevant_keys.update(_set_bit(key, ancilla_index, 1 - key[ancilla_index]) for key in self.branches)
@@ -196,19 +222,25 @@ class BranchState:
         return self._replace(new)
 
     def _apply_system_operator(self, operator: OpExpr) -> "BranchState":
+        if self.expression_kind == "word":
+            raise UnsupportedGateError("Explicit system gates are not supported in QSP word mode")
         return self._replace({key: operator * branch for key, branch in self.branches.items()})
 
     def _apply_controlled_pauli_ancilla_to_system(self, control_index: int, operator: OpExpr) -> "BranchState":
-        new: Dict[BranchKey, OpExpr] = {}
+        if self.expression_kind == "word":
+            raise UnsupportedGateError("Controlled system Pauli gates are not supported in QSP word mode")
+        new: Dict[BranchKey, BranchValue] = {}
         for key, branch in self.branches.items():
             new[key] = operator * branch if key[control_index] == 1 else branch
         return self._replace(new)
 
     def _apply_cx_system_to_ancilla(self, system_index: int, target_ancilla_index: int) -> "BranchState":
+        if self.expression_kind == "word":
+            raise UnsupportedGateError("System-controlled cx is not supported in QSP word mode")
         z_op = pauli("Z", index=system_index, num_qubits=self.num_system_qubits)
         p0 = (identity(self.num_system_qubits) + z_op).scale(sp.Rational(1, 2))
         p1 = (identity(self.num_system_qubits) - z_op).scale(sp.Rational(1, 2))
-        new: Dict[BranchKey, OpExpr] = {}
+        new: Dict[BranchKey, BranchValue] = {}
 
         for key, branch in self.branches.items():
             flipped = _flip_bit(key, target_ancilla_index)
@@ -218,20 +250,54 @@ class BranchState:
         return self._replace(new)
 
     def _apply_cx_ancilla_to_ancilla(self, control_index: int, target_index: int) -> "BranchState":
-        new: Dict[BranchKey, OpExpr] = {}
+        new: Dict[BranchKey, BranchValue] = {}
         for key, branch in self.branches.items():
             new_key = _flip_bit(key, target_index) if key[control_index] == 1 else key
             _add_branch(new, new_key, branch, self.num_system_qubits)
         return self._replace(new)
 
     def _apply_cz_ancilla_to_ancilla(self, left_index: int, right_index: int) -> "BranchState":
-        new: Dict[BranchKey, OpExpr] = {}
+        new: Dict[BranchKey, BranchValue] = {}
         for key, branch in self.branches.items():
             new[key] = -branch if key[left_index] == 1 and key[right_index] == 1 else branch
         return self._replace(new)
 
-    def _replace(self, branches: Mapping[BranchKey, OpExpr]) -> "BranchState":
-        return BranchState(self.num_ancillas, self.num_system_qubits, branches)
+    def _apply_uh(self, ancilla_index: int, *, dagger: bool) -> "BranchState":
+        if self.expression_kind != "word":
+            raise UnsupportedGateError("UH/UHdg requires QSP word mode")
+
+        if dagger:
+            top_left, top_right, bottom_left, bottom_right = "Hd", "Ad", "Gd", "Cd"
+        else:
+            top_left, top_right, bottom_left, bottom_right = "H", "G", "A", "C"
+
+        new: Dict[BranchKey, BranchValue] = {}
+        processed = set()
+        relevant_keys = set(self.branches)
+        relevant_keys.update(_set_bit(key, ancilla_index, 1 - key[ancilla_index]) for key in self.branches)
+
+        for key in sorted(relevant_keys):
+            key0 = _set_bit(key, ancilla_index, 0)
+            key1 = _set_bit(key, ancilla_index, 1)
+            if key0 in processed:
+                continue
+
+            branch0 = self.branch(key0)
+            branch1 = self.branch(key1)
+            new[key0] = word_atom(top_left) * branch0 + word_atom(top_right) * branch1
+            new[key1] = word_atom(bottom_left) * branch0 + word_atom(bottom_right) * branch1
+            processed.add(key0)
+            processed.add(key1)
+
+        return self._replace(new)
+
+    def _replace(self, branches: Mapping[BranchKey, BranchValue]) -> "BranchState":
+        return BranchState(self.num_ancillas, self.num_system_qubits, branches, expression_kind=self.expression_kind)
+
+    def _zero(self) -> BranchValue:
+        if self.expression_kind == "word":
+            return WordExpr.zero()
+        return zero(self.num_system_qubits)
 
 
 def _ancilla_gate_matrix(name: str, theta: Optional[sp.Expr]) -> Tuple[Tuple[sp.Expr, sp.Expr], Tuple[sp.Expr, sp.Expr]]:
@@ -344,5 +410,6 @@ def _flip_bit(key: BranchKey, index: int) -> BranchKey:
     return _set_bit(key, index, 1 - key[index])
 
 
-def _add_branch(branches: Dict[BranchKey, OpExpr], key: BranchKey, value: OpExpr, num_system_qubits: int) -> None:
-    branches[key] = branches.get(key, zero(num_system_qubits)) + value
+def _add_branch(branches: Dict[BranchKey, BranchValue], key: BranchKey, value: BranchValue, num_system_qubits: int) -> None:
+    fallback: BranchValue = WordExpr.zero() if isinstance(value, WordExpr) else zero(num_system_qubits)
+    branches[key] = branches.get(key, fallback) + value

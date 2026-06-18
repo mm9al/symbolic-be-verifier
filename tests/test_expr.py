@@ -1,6 +1,7 @@
 import sympy as sp
 
 from symbolic.expr import parse_operator_expression, pauli
+from symbolic.word_expr import WordExpr, atom, eliminate
 
 
 def test_pauli_multiplication_rules():
@@ -45,3 +46,17 @@ def test_parse_multi_qubit_operator_expression():
 
     assert parsed.equals(expected)
     assert str(parsed) == "(X_0 X_1 + Z_0 Z_1)/2"
+
+
+def test_word_expr_noncommutative_multiplication_and_collection():
+    expr = (atom("H") * atom("Ad")) * (atom("A") * atom("C"))
+    expected = WordExpr({("H", "Ad", "A", "C"): 1})
+
+    assert expr.equals(expected)
+    assert (expr + expected).equals(expected.scale(2))
+
+
+def test_word_expr_elimination_rewrites_adjacent_pairs_to_fixed_point():
+    expr = atom("Hd") * atom("H") + atom("Ad") * atom("A")
+
+    assert eliminate(expr).equals(WordExpr.identity())

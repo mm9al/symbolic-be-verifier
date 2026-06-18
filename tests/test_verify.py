@@ -6,7 +6,20 @@ import sympy as sp
 from symbolic.branch_state import BranchState, Gate, UnsupportedGateError
 from symbolic.expr import parse_operator_expression, pauli
 from symbolic.qasm_parser import parse_qasm_file, parse_qasm_text
-from symbolic.verify import FAIL, PASS, PASS_UP_TO_GLOBAL_PHASE, VerificationResult, format_result, proportional_phase, verify_qasm_file
+from symbolic.verify import (
+    FAIL,
+    PASS,
+    PASS_UP_TO_GLOBAL_PHASE,
+    VerificationResult,
+    format_result,
+    pauli_expr_close,
+    polynomial_close,
+    project_polynomial_part,
+    proportional_phase,
+    scalar_close,
+    verify_qasm_file,
+)
+from symbolic.word_expr import WordExpr
 
 
 def test_h_on_ancilla_update():
@@ -165,6 +178,22 @@ def test_proportional_but_non_unit_scale_fails():
     assert result.status == FAIL
 
 
+def test_numeric_tolerance_accepts_exponential_and_decimal_coefficients():
+    actual_coeff = sp.exp(sp.I * sp.Rational(1160258681, 10**12))
+    expected_coeff = sp.Float("0.9999993269", 20) + sp.I * sp.Float("0.001160258420", 20)
+    actual = pauli("I").scale(actual_coeff)
+    expected = pauli("I").scale(expected_coeff)
+
+    assert actual.equals(expected) is False
+    assert scalar_close(actual_coeff, expected_coeff)
+    assert pauli_expr_close(actual, expected)
+
+    result = VerificationResult(final_state=BranchState(1, 1, {(0,): actual}), trace=[], expected=expected)
+
+    assert result.success is True
+    assert result.status == PASS
+
+
 def test_ancilla_rx_and_ry_update_rules():
     gates = parse_qasm_text(
         """
@@ -257,3 +286,67 @@ def test_system_system_controlled_gates_are_unsupported_in_v04():
 
     with pytest.raises(UnsupportedGateError, match="system-system cz"):
         state.apply(Gate("cz", (1, 2)), ancillas=(0,), systems=(1, 2))
+
+
+def test_uhdg_uh_opaque_reduces_to_identity():
+    path = Path(__file__).parents[1] / "examples" / "uhdg_uh_opaque.qasm"
+    result = verify_qasm_file(
+        path,
+        ancillas=(0, 1),
+        systems=(2,),
+        base="(X + Z)/2",
+        expected_polynomial="1",
+    )
+
+    assert result.success is True
+    assert result.status == PASS
+    assert result.qsp_normalized == WordExpr.identity()
+    assert result.qsp_polynomial == 1
+
+
+def test_qsp_t3_opaque_verifies_chebyshev_polynomial_on_hermitian_base():
+    path = Path(__file__).parents[1] / "examples" / "qsp_t3_opaque.qasm"
+    result = verify_qasm_file(
+        path,
+        ancillas=(0, 1),
+        systems=(2,),
+        base="(X + Z)/2",
+        expected_polynomial="4*x^3 - 3*x",
+        hermitian_base=True,
+        keep_trace=True,
+    )
+
+    expected_operator = (pauli("X") + pauli("Z")).scale(sp.Rational(-1, 2))
+    expected_polynomial = 4 * sp.Symbol("x") ** 3 - 3 * sp.Symbol("x")
+
+    assert result.success is True
+    assert result.status == PASS
+    assert result.qsp_normalized == WordExpr({("H", "H", "H"): 4, ("H",): -3})
+    assert sp.expand(result.qsp_polynomial - expected_polynomial) == 0
+    assert result.qsp_actual.equals(expected_operator)
+    assert "Normalized B[00] = -3*H + 4*H H H" in format_result(result, show_trace=False)
+
+
+def test_qsp_polynomial_only_check_does_not_require_base():
+    path = Path(__file__).parents[1] / "examples" / "qsp_t3_opaque.qasm"
+    result = verify_qasm_file(
+        path,
+        ancillas=(0, 1),
+        systems=(2,),
+        expected_polynomial="4*x^3 - 3*x",
+        hermitian_base=True,
+        compare_polynomial_only=True,
+    )
+
+    assert result.success is True
+    assert result.status == PASS
+    assert result.qsp_polynomial_only is True
+    assert result.qsp_actual is None
+    assert result.qsp_expected is None
+
+
+def test_project_polynomial_real_and_imaginary_parts():
+    polynomial = (1 + 2 * sp.I) + (3 - 4 * sp.I) * sp.Symbol("x") ** 2
+
+    assert polynomial_close(project_polynomial_part(polynomial, "real"), 1 + 3 * sp.Symbol("x") ** 2)
+    assert polynomial_close(project_polynomial_part(polynomial, "imag"), 2 - 4 * sp.Symbol("x") ** 2)
