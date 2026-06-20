@@ -14,7 +14,6 @@ from symbolic.verify import (
     format_result,
     pauli_expr_close,
     polynomial_close,
-    project_polynomial_part,
     proportional_phase,
     scalar_close,
     verify_qasm_file,
@@ -343,10 +342,3 @@ def test_qsp_polynomial_only_check_does_not_require_base():
     assert result.qsp_polynomial_only is True
     assert result.qsp_actual is None
     assert result.qsp_expected is None
-
-
-def test_project_polynomial_real_and_imaginary_parts():
-    polynomial = (1 + 2 * sp.I) + (3 - 4 * sp.I) * sp.Symbol("x") ** 2
-
-    assert polynomial_close(project_polynomial_part(polynomial, "real"), 1 + 3 * sp.Symbol("x") ** 2)
-    assert polynomial_close(project_polynomial_part(polynomial, "imag"), 2 - 4 * sp.Symbol("x") ** 2)

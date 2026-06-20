@@ -29,6 +29,7 @@ import io
 import json
 import math
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -112,6 +113,32 @@ def _polynomial_expr(coeffs: list[float], variable: str, precision: int) -> str:
     return " ".join(terms) if terms else "0"
 
 
+def _format_float_token(value: float) -> str:
+    if value != 0.0 and abs(value) < 1e-3:
+        text = f"{value:.0e}"
+        text = text.replace("e-0", "e-").replace("e+0", "e").replace("e+", "e")
+        return text
+    text = f"{value:g}".replace("-", "m").replace(".", "p")
+    if text.startswith("0p"):
+        return "0" + text[2:]
+    return text
+
+
+def _example_tag(tau: float, epsilon: float) -> str:
+    return f"t{_format_float_token(tau)}_eps{_format_float_token(epsilon)}"
+
+
+def _qubit_index(qubit: str) -> int:
+    match = re.fullmatch(r"q\[(\d+)\]", qubit.strip())
+    if not match:
+        raise ValueError(f"Expected a q[index] qubit name, got {qubit!r}")
+    return int(match.group(1))
+
+
+def _qreg_size(*qubits: str) -> int:
+    return max(_qubit_index(qubit) for qubit in qubits) + 1
+
+
 def _complex_coefficients(real_coeffs: list[float], imag_coeffs: list[float]) -> list[dict[str, float]]:
     length = max(len(real_coeffs), len(imag_coeffs))
     real_padded = _pad(real_coeffs, length)
@@ -159,6 +186,43 @@ def _phase_block(angle: float, phase_qubit: str, block_ancilla: str) -> list[str
     ]
 
 
+def _select_rz(angle: float, selector_qubit: str, phase_qubit: str) -> list[str]:
+    half = angle / 2.0
+    half_text = f"{half:.12g}"
+    neg_half_text = f"{-half:.12g}"
+    return [
+        f"x {selector_qubit};",
+        f"rz({half_text}) {phase_qubit};",
+        f"cx {selector_qubit}, {phase_qubit};",
+        f"rz({neg_half_text}) {phase_qubit};",
+        f"cx {selector_qubit}, {phase_qubit};",
+        f"x {selector_qubit};",
+        f"rz({neg_half_text}) {phase_qubit};",
+        f"cx {selector_qubit}, {phase_qubit};",
+        f"rz({half_text}) {phase_qubit};",
+        f"cx {selector_qubit}, {phase_qubit};",
+    ]
+
+
+def _open_cx_block(block_ancilla: str, phase_qubit: str) -> list[str]:
+    return [
+        f"x {block_ancilla};",
+        f"h {phase_qubit};",
+        f"cz {phase_qubit}, {block_ancilla};",
+        f"h {phase_qubit};",
+        f"x {block_ancilla};",
+    ]
+
+
+def _selector_phase_block(angle: float, selector_qubit: str, phase_qubit: str, block_ancilla: str) -> list[str]:
+    open_control_angle = -angle
+    return [
+        *_open_cx_block(block_ancilla, phase_qubit),
+        *_select_rz(open_control_angle, selector_qubit, phase_qubit),
+        *_open_cx_block(block_ancilla, phase_qubit),
+    ]
+
+
 def _qasm_snippet(
     pyqsp_phases: list[float],
     qsvt_projector_phases: list[float],
@@ -187,6 +251,235 @@ def _qasm_snippet(
         lines.append(f"{gate} {block_ancilla}, {system_qubit};")
         lines.append("")
     return "\n".join(lines)
+
+
+def _selector_qasm_snippet(
+    pyqsp_phases: list[float],
+    qsvt_projector_phases: list[float],
+    qasm_rz_angles: list[float],
+    *,
+    selector_qubit: str,
+    phase_qubit: str,
+    block_ancilla: str,
+    system_qubit: str,
+    signal_gate: str,
+    signal_gate_dagger: str,
+) -> str:
+    lines: list[str] = []
+    lines.append(f"h {selector_qubit};")
+    lines.append("")
+    for idx, (phase, psi, theta) in enumerate(zip(pyqsp_phases, qsvt_projector_phases, qasm_rz_angles)):
+        lines.append(f"// phi_{idx} = {phase:.12g}")
+        lines.append(f"// psi_{idx} = {psi:.12g}")
+        lines.append(f"// solid-control theta_{idx} = {theta:.12g}")
+        lines.append(f"// open-control SELECT_RZ theta_{idx} = {-theta:.12g}")
+        lines.extend(_selector_phase_block(theta, selector_qubit, phase_qubit, block_ancilla))
+        if idx == len(pyqsp_phases) - 1:
+            continue
+
+        use_dagger = idx % 2 == 1
+        gate = signal_gate_dagger if use_dagger else signal_gate
+        label = "U^\\dagger" if use_dagger else "U"
+        lines.append("")
+        lines.append(f"// {label}")
+        lines.append(f"{gate} {block_ancilla}, {system_qubit};")
+        lines.append("")
+
+    lines.append("")
+    lines.append(f"h {selector_qubit};")
+    lines.append(f"sdg {selector_qubit};")
+    lines.append(f"x {selector_qubit};")
+    return "\n".join(lines)
+
+
+def _selector_qasm_file(
+    record: dict[str, Any],
+    *,
+    precision: int,
+    selector_qubit: str,
+    phase_qubit: str,
+    block_ancilla: str,
+    system_qubit: str,
+    signal_gate: str,
+    signal_gate_dagger: str,
+) -> str:
+    component = record["selector_component"]
+    qreg_size = _qreg_size(selector_qubit, phase_qubit, block_ancilla, system_qubit)
+    polynomial = _polynomial_expr(record["monomial_coefficients"], "x", precision)
+    snippet = _selector_qasm_snippet(
+        record["pyqsp_phases"],
+        record["qsvt_projector_phases"],
+        record["qasm_rz_angles"],
+        selector_qubit=selector_qubit,
+        phase_qubit=phase_qubit,
+        block_ancilla=block_ancilla,
+        system_qubit=system_qubit,
+        signal_gate=signal_gate,
+        signal_gate_dagger=signal_gate_dagger,
+    )
+    phase_lines = "\n".join(f"//   phi_{idx} = {phase:.17g}" for idx, phase in enumerate(record["pyqsp_phases"]))
+    theta_lines = "\n".join(f"//   theta_{idx} = {theta:.17g}" for idx, theta in enumerate(record["qasm_rz_angles"]))
+
+    return f"""OPENQASM 2.0;
+include "qelib1.inc";
+
+opaque {signal_gate} a, s;
+opaque {signal_gate_dagger} a, s;
+
+qreg q[{qreg_size}];
+
+// {phase_qubit} = phase ancilla
+// {block_ancilla} = block-encoding ancilla
+// {system_qubit} = system qubit
+// {selector_qubit} = selector ancilla
+
+// Selector-wrapped Hamiltonian simulation {component} component.
+// Generated by tools/hamsim_qsp.py with:
+//   tau = {record["tau"]}
+//   epsilon = {record["epsilon"]}
+//   method = sym_qsp
+//   signal_operator = Wx
+//   ensure_bounded = {record["ensure_bounded"]}
+//   scale = {record["scale"]}
+//
+// The base QSP component has Im B[00] = P_{component}(H). The selector wrapper
+// coherently runs theta and -theta branches, takes their difference, multiplies
+// by -i, and moves the result to the all-zero selector branch. Therefore the
+// final all-zero branch is directly P_{component}(H), so the verifier compares
+// the full polynomial.
+//
+// Open-control CNOTs on the block ancilla are expanded with x gates and h-cz-h.
+// This matches the paper convention that phases act on the |0> branch.
+//
+// P_{component}(x) = {polynomial}
+//
+// QSP phases:
+{phase_lines}
+//
+// Physical OpenQASM rz angles use theta_rz = -2 * psi:
+{theta_lines}
+
+{snippet}
+"""
+
+
+def _verification_command(
+    record: dict[str, Any],
+    qasm_path: Path,
+    *,
+    precision: int,
+    selector_qubit: str,
+    phase_qubit: str,
+    block_ancilla: str,
+    system_qubit: str,
+) -> list[str]:
+    polynomial = _polynomial_expr(record["monomial_coefficients"], "x", precision)
+    return [
+        ".venv/bin/python",
+        "-m",
+        "symbolic.verify",
+        str(qasm_path),
+        "--ancillas",
+        selector_qubit,
+        phase_qubit,
+        block_ancilla,
+        "--systems",
+        system_qubit,
+        "--expected-polynomial",
+        polynomial,
+        "--hermitian-base",
+        "--compare-polynomial-only",
+    ]
+
+
+def write_selector_examples(
+    *,
+    tau: float,
+    epsilon: float,
+    ensure_bounded: bool,
+    method: str,
+    signal_operator: str,
+    precision: int,
+    examples_dir: Path,
+    selector_qubit: str,
+    phase_qubit: str,
+    block_ancilla: str,
+    system_qubit: str,
+    signal_gate: str,
+    signal_gate_dagger: str,
+) -> dict[str, Any]:
+    if method != "sym_qsp" or signal_operator != "Wx":
+        raise ValueError("--write-examples currently expects --method sym_qsp --signal-operator Wx")
+
+    tag = _example_tag(tau, epsilon)
+    output_dir = examples_dir / f"qsp_hamsim_{tag}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    records = [
+        generate_selector_component(
+            component=component,
+            tau=tau,
+            epsilon=epsilon,
+            ensure_bounded=ensure_bounded,
+            compute_angles=True,
+            method=method,
+            signal_operator=signal_operator,
+        )
+        for component in ("cos", "sin")
+    ]
+
+    files: list[dict[str, Any]] = []
+    for record in records:
+        component = record["selector_component"]
+        filename = f"qsp_hamsim_{component}_selector_{tag}_deg{record['degree']}.qasm"
+        qasm_path = output_dir / filename
+        qasm_text = _selector_qasm_file(
+            record,
+            precision=precision,
+            selector_qubit=selector_qubit,
+            phase_qubit=phase_qubit,
+            block_ancilla=block_ancilla,
+            system_qubit=system_qubit,
+            signal_gate=signal_gate,
+            signal_gate_dagger=signal_gate_dagger,
+        )
+        qasm_path.write_text(qasm_text, encoding="utf-8")
+        polynomial = _polynomial_expr(record["monomial_coefficients"], "x", precision)
+        files.append(
+            {
+                "component": component,
+                "qasm": str(qasm_path),
+                "degree": record["degree"],
+                "polynomial": polynomial,
+                "monomial_coefficients": record["monomial_coefficients"],
+                "verification_command": _verification_command(
+                    record,
+                    qasm_path,
+                    precision=precision,
+                    selector_qubit=selector_qubit,
+                    phase_qubit=phase_qubit,
+                    block_ancilla=block_ancilla,
+                    system_qubit=system_qubit,
+                ),
+            }
+        )
+
+    metadata = {
+        "tau": tau,
+        "epsilon": epsilon,
+        "ensure_bounded": ensure_bounded,
+        "scale": records[0]["scale"],
+        "selector_qubit": selector_qubit,
+        "phase_qubit": phase_qubit,
+        "block_ancilla": block_ancilla,
+        "system_qubit": system_qubit,
+        "comparison": "full polynomial",
+        "files": files,
+    }
+    metadata_path = output_dir / "expected_polynomials.json"
+    metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    metadata["metadata"] = str(metadata_path)
+    return metadata
 
 
 def generate_component(
@@ -322,6 +615,37 @@ def generate_exp_component(
     }
 
 
+def generate_selector_component(
+    *,
+    component: str,
+    tau: float,
+    epsilon: float,
+    ensure_bounded: bool,
+    compute_angles: bool,
+    method: str,
+    signal_operator: str,
+) -> dict[str, Any]:
+    base = generate_component(
+        component=component,
+        tau=tau,
+        epsilon=epsilon,
+        ensure_bounded=ensure_bounded,
+        compute_angles=compute_angles,
+        method=method,
+        signal_operator=signal_operator,
+    )
+    data = dict(base)
+    data["component"] = f"{component}-selector"
+    data["selector_component"] = component
+    data["selector_output"] = "all-zero branch equals the former imaginary polynomial part"
+    phase_conversion = data.get("phase_conversion")
+    if phase_conversion:
+        data["phase_conversion"] = phase_conversion + "; selector wrapper extracts imaginary part"
+    else:
+        data["phase_conversion"] = "selector wrapper extracts imaginary part"
+    return data
+
+
 def _print_text(
     records: list[dict[str, Any]],
     *,
@@ -376,6 +700,8 @@ def _print_text(
             print(f"pyqsp phases = {record['pyqsp_phases']}")
             print(f"QSVT projector phases = {record['qsvt_projector_phases']}")
             print(f"pyqsp response part = {record['pyqsp_response_part']}")
+            if "selector_output" in record:
+                print(f"selector output = {record['selector_output']}")
             print(f"qasm rz angles = {record['qasm_rz_angles']}")
 
         if include_logs and record["pyqsp_log"]:
@@ -388,18 +714,33 @@ def _print_text(
                 print("QASM snippet skipped because --no-angles was used.")
             else:
                 print("QASM snippet:")
-                print(
-                    _qasm_snippet(
-                        record["pyqsp_phases"],
-                        record["qsvt_projector_phases"],
-                        record["qasm_rz_angles"],
-                        phase_qubit=qasm_args.phase_qubit,
-                        block_ancilla=qasm_args.block_ancilla,
-                        system_qubit=qasm_args.system_qubit,
-                        signal_gate=qasm_args.signal_gate,
-                        signal_gate_dagger=qasm_args.signal_gate_dagger,
+                if "selector_component" in record:
+                    print(
+                        _selector_qasm_snippet(
+                            record["pyqsp_phases"],
+                            record["qsvt_projector_phases"],
+                            record["qasm_rz_angles"],
+                            selector_qubit=qasm_args.selector_qubit,
+                            phase_qubit=qasm_args.phase_qubit,
+                            block_ancilla=qasm_args.block_ancilla,
+                            system_qubit=qasm_args.system_qubit,
+                            signal_gate=qasm_args.signal_gate,
+                            signal_gate_dagger=qasm_args.signal_gate_dagger,
+                        )
                     )
-                )
+                else:
+                    print(
+                        _qasm_snippet(
+                            record["pyqsp_phases"],
+                            record["qsvt_projector_phases"],
+                            record["qasm_rz_angles"],
+                            phase_qubit=qasm_args.phase_qubit,
+                            block_ancilla=qasm_args.block_ancilla,
+                            system_qubit=qasm_args.system_qubit,
+                            signal_gate=qasm_args.signal_gate,
+                            signal_gate_dagger=qasm_args.signal_gate_dagger,
+                        )
+                    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -418,7 +759,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--component",
-        choices=["cos", "sin", "both", "exp"],
+        choices=["cos", "sin", "both", "exp", "cos-selector", "sin-selector"],
         default="cos",
         help="Which Hamiltonian-simulation component to generate.",
     )
@@ -453,7 +794,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--precision",
         type=int,
-        default=12,
+        default=17,
         help="Significant digits for the printed polynomial expression.",
     )
     parser.add_argument(
@@ -471,9 +812,21 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print a QASM phase/U sequence snippet after the data.",
     )
+    parser.add_argument(
+        "--write-examples",
+        action="store_true",
+        help="Write selector-wrapped cos/sin QASM examples and expected polynomial metadata under --examples-dir.",
+    )
+    parser.add_argument(
+        "--examples-dir",
+        type=Path,
+        default=Path("examples"),
+        help="Directory where --write-examples creates qsp_hamsim_* folders.",
+    )
     parser.add_argument("--phase-qubit", default="q[0]")
     parser.add_argument("--block-ancilla", default="q[1]")
     parser.add_argument("--system-qubit", default="q[2]")
+    parser.add_argument("--selector-qubit", default="q[3]")
     parser.add_argument("--signal-gate", default="UH")
     parser.add_argument("--signal-gate-dagger", default="UHdg")
 
@@ -485,13 +838,52 @@ def parse_args() -> argparse.Namespace:
     if args.precision <= 0:
         parser.error("--precision must be positive")
     if args.qasm_snippet and args.component in {"both", "exp"}:
-        parser.error("--qasm-snippet requires --component cos or --component sin")
+        parser.error("--qasm-snippet requires --component cos, sin, cos-selector, or sin-selector")
+    if args.write_examples and args.no_angles:
+        parser.error("--write-examples requires angle generation")
     return args
 
 
 def main() -> int:
     args = parse_args()
-    if args.component == "exp":
+    if args.write_examples:
+        metadata = write_selector_examples(
+            tau=args.tau,
+            epsilon=args.epsilon,
+            ensure_bounded=not args.unbounded,
+            method=args.method,
+            signal_operator=args.signal_operator,
+            precision=args.precision,
+            examples_dir=args.examples_dir,
+            selector_qubit=args.selector_qubit,
+            phase_qubit=args.phase_qubit,
+            block_ancilla=args.block_ancilla,
+            system_qubit=args.system_qubit,
+            signal_gate=args.signal_gate,
+            signal_gate_dagger=args.signal_gate_dagger,
+        )
+        if args.format == "json":
+            print(json.dumps(metadata, indent=2, sort_keys=True))
+        else:
+            print(f"Wrote metadata: {metadata['metadata']}")
+            for file_record in metadata["files"]:
+                print(f"Wrote {file_record['component']}: {file_record['qasm']}")
+                print(f"  polynomial = {file_record['polynomial']}")
+        return 0
+
+    if args.component in {"cos-selector", "sin-selector"}:
+        records = [
+            generate_selector_component(
+                component=args.component.removesuffix("-selector"),
+                tau=args.tau,
+                epsilon=args.epsilon,
+                ensure_bounded=not args.unbounded,
+                compute_angles=not args.no_angles,
+                method=args.method,
+                signal_operator=args.signal_operator,
+            )
+        ]
+    elif args.component == "exp":
         records = [
             generate_exp_component(
                 tau=args.tau,

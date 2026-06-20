@@ -112,32 +112,33 @@ Verification results:
 
 ## Hamiltonian Simulation QSP Data
 
-Use `tools/hamsim_qsp.py` to generate pyqsp Hamiltonian-simulation
-polynomials and phase angles for future QASM examples. This tool needs pyqsp's
-scientific Python dependencies (`numpy`, `scipy`, `matplotlib`), so run it with
-an environment that has pyqsp available, not the minimal verifier `.venv`.
+Use `tools/hamsim_qsp.py` to generate selector-wrapped Hamiltonian-simulation
+cosine and sine QASM examples. This tool needs pyqsp's scientific Python
+dependencies (`numpy`, `scipy`, `matplotlib`), so run it with an environment
+that has pyqsp available, not the minimal verifier `.venv`.
 
 ```bash
-python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --component cos
+python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --write-examples
 ```
 
-Useful variants:
+This writes both selector examples into one folder, plus polynomial metadata:
 
-```bash
-python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --component both --format json
-python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --component exp --no-angles
-python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --component cos --no-angles
-python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --component cos --qasm-snippet
+```text
+examples/qsp_hamsim_t05_eps1e-4/
+  qsp_hamsim_cos_selector_t05_eps1e-4_deg4.qasm
+  qsp_hamsim_sin_selector_t05_eps1e-4_deg5.qasm
+  expected_polynomials.json
 ```
 
-The tool prints polynomial coefficients in both Chebyshev and monomial bases.
-Use the monomial coefficients when writing symbolic verifier expectations.
-For direct Hamiltonian-simulation checks, `--component exp` combines pyqsp's
-cosine and sine approximants as `P_exp(x) = P_cos(x) - I*P_sin(x)`, which can
-be passed to `--expected-polynomial`.
-It also keeps pyqsp phases separate from physical OpenQASM rotation angles:
-QASM snippets first convert pyqsp's Wx phases to QSVT projector phases,
-then write the physical `rz(theta_rz)` angle:
+The original pyqsp component circuits place the target polynomial in the
+imaginary part of the top-left block. The selector examples add `q[3]`, run the
+`theta` and `-theta` branches coherently, extract their difference, multiply by
+`-i`, and move the result to the all-zero branch. The final block is therefore
+directly `P_cos(H)` or `P_sin(H)`, so the verifier compares the full polynomial.
+
+The QASM files still keep pyqsp phases separate from physical OpenQASM rotation
+angles. They first convert pyqsp's Wx phases to QSVT projector phases, then
+write the physical `rz(theta_rz)` angle:
 
 ```text
 psi_0 = phi_0 + pi/4
@@ -146,18 +147,31 @@ psi_d = phi_d + pi/4 for even d, and phi_d - pi/4 for odd d
 theta_rz = -2 * psi
 ```
 
-When a QSP circuit's top-left block contains both real and imaginary parts, use
-`--compare-polynomial-part real` or `--compare-polynomial-part imag` to compare
-only that part of the actual polynomial against `--expected-polynomial`. Use
-`--compare-polynomial-only` to compare polynomial coefficients directly instead
-of evaluating the polynomial on `--base`.
+Use `--compare-polynomial-only` to compare polynomial coefficients directly
+instead of evaluating the polynomial on `--base`.
 
 ```bash
-.venv/bin/python -m symbolic.verify examples/qsp_hamsim_t05_eps1e-4/qsp_hamsim_cos_t05_eps1e-4_deg4.qasm \
-  --ancillas 'q[0]' 'q[1]' \
+.venv/bin/python -m symbolic.verify examples/qsp_hamsim_t05_eps1e-4/qsp_hamsim_cos_selector_t05_eps1e-4_deg4.qasm \
+  --ancillas 'q[3]' 'q[0]' 'q[1]' \
   --systems 'q[2]' \
-  --expected-polynomial '0.4999996635554534 - 0.062493938728279574*x^2 + 0.0012858918109143005*x^4' \
+  --expected-polynomial '0.49999966355545339 - 0.062493938728279574*x^2 + 0.0012858918109143005*x^4' \
   --hermitian-base \
-  --compare-polynomial-part imag \
   --compare-polynomial-only
+```
+
+```bash
+.venv/bin/python -m symbolic.verify examples/qsp_hamsim_t05_eps1e-4/qsp_hamsim_sin_selector_t05_eps1e-4_deg5.qasm \
+  --ancillas 'q[3]' 'q[0]' 'q[1]' \
+  --systems 'q[2]' \
+  --expected-polynomial '0.24999991579484243*x - 0.010415992523176125*x^3 + 0.00012885803586171963*x^5' \
+  --hermitian-base \
+  --compare-polynomial-only
+```
+
+For debugging the raw component data without writing files:
+
+```bash
+python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --component both --format json
+python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --component cos-selector --qasm-snippet
+python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --component sin-selector --qasm-snippet
 ```

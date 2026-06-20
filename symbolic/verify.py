@@ -20,7 +20,6 @@ PASS_UP_TO_GLOBAL_PHASE = "PASS_UP_TO_GLOBAL_PHASE"
 FAIL = "FAIL"
 FAIL_GARBAGE = "FAIL_GARBAGE"
 DEFAULT_TOLERANCE = 1e-8
-POLYNOMIAL_COMPARE_PARTS = ("full", "real", "imag")
 
 
 @dataclass(frozen=True)
@@ -43,7 +42,6 @@ class VerificationResult:
     qsp_actual: Optional[OpExpr] = None
     qsp_expected: Optional[OpExpr] = None
     qsp_status: Optional[str] = None
-    qsp_compare_part: str = "full"
     qsp_polynomial_only: bool = False
     tolerance: float = DEFAULT_TOLERANCE
 
@@ -124,13 +122,9 @@ def verify_qasm_file(
     base: str | OpExpr | None = None,
     expected_polynomial: str | sp.Expr | None = None,
     hermitian_base: bool = False,
-    compare_polynomial_part: str = "full",
     compare_polynomial_only: bool = False,
     tolerance: float = DEFAULT_TOLERANCE,
 ) -> VerificationResult:
-    if compare_polynomial_part not in POLYNOMIAL_COMPARE_PARTS:
-        raise ValueError(f"compare_polynomial_part must be one of {POLYNOMIAL_COMPARE_PARTS}")
-
     gates = parse_qasm_file(path)
     ancilla_qubits = _normalize_ancillas(ancilla=ancilla, ancillas=ancillas)
     system_qubits = _normalize_systems(system=system, systems=systems)
@@ -166,12 +160,11 @@ def verify_qasm_file(
         else:
             qsp_polynomial = convert_h_word_to_polynomial(qsp_normalized)
             qsp_expected_polynomial = parse_polynomial(expected_polynomial)
-            actual_polynomial = project_polynomial_part(qsp_polynomial, compare_polynomial_part)
             if compare_polynomial_only:
-                qsp_status = PASS if polynomial_close(actual_polynomial, qsp_expected_polynomial, tol=tolerance) else FAIL
+                qsp_status = PASS if polynomial_close(qsp_polynomial, qsp_expected_polynomial, tol=tolerance) else FAIL
             else:
                 base_expr = _normalize_base(base, num_system_qubits=len(system_qubits))
-                qsp_actual = eval_polynomial_on_pauliop(actual_polynomial, base_expr)
+                qsp_actual = eval_polynomial_on_pauliop(qsp_polynomial, base_expr)
                 qsp_expected = eval_polynomial_on_pauliop(qsp_expected_polynomial, base_expr)
                 qsp_status = PASS if pauli_expr_close(qsp_actual, qsp_expected, tol=tolerance) else FAIL
 
@@ -187,7 +180,6 @@ def verify_qasm_file(
         qsp_actual=qsp_actual,
         qsp_expected=qsp_expected,
         qsp_status=qsp_status,
-        qsp_compare_part=compare_polynomial_part,
         qsp_polynomial_only=compare_polynomial_only,
         tolerance=tolerance,
     )
@@ -232,8 +224,6 @@ def format_result(result: VerificationResult, *, show_trace: bool = False) -> st
             lines.append(f"Polynomial = {_format_polynomial(result.qsp_polynomial)}")
         if result.qsp_expected_polynomial is not None:
             lines.append(f"Expected polynomial = {_format_polynomial(result.qsp_expected_polynomial)}")
-        if result.qsp_compare_part != "full":
-            lines.append(f"Compared actual polynomial part = {result.qsp_compare_part}")
         if result.qsp_polynomial_only:
             lines.append("Comparison mode = polynomial-only")
         if result.qsp_actual is not None:
@@ -311,29 +301,6 @@ def parse_polynomial(polynomial: str | sp.Expr) -> sp.Expr:
     else:
         parsed = sp.sympify(polynomial)
     return scalar_simplify(sp.expand(parsed))
-
-
-def project_scalar_part(value: sp.Expr, part: str) -> sp.Expr:
-    if part == "full":
-        return scalar_simplify(value)
-    if part == "real":
-        return scalar_simplify(sp.re(value))
-    if part == "imag":
-        return scalar_simplify(sp.im(value))
-    raise ValueError(f"part must be one of {POLYNOMIAL_COMPARE_PARTS}")
-
-
-def project_polynomial_part(polynomial: str | sp.Expr, part: str) -> sp.Expr:
-    parsed = parse_polynomial(polynomial)
-    if part == "full":
-        return parsed
-
-    x = sp.Symbol("x")
-    poly = sp.Poly(parsed, x)
-    projected = sp.Integer(0)
-    for (degree,), coeff in poly.terms():
-        projected += project_scalar_part(coeff, part) * x ** degree
-    return scalar_simplify(sp.expand(projected))
 
 
 def eval_polynomial_on_pauliop(polynomial: str | sp.Expr, base: OpExpr) -> OpExpr:
@@ -458,12 +425,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--expected-polynomial", help='Expected QSP polynomial in x, for example "4*x^3 - 3*x".')
     parser.add_argument("--hermitian-base", action="store_true", help="Rewrite Hd atoms to H before QSP polynomial evaluation.")
     parser.add_argument(
-        "--compare-polynomial-part",
-        choices=POLYNOMIAL_COMPARE_PARTS,
-        default="full",
-        help="Compare the full, real, or imaginary part of the actual polynomial coefficients against --expected-polynomial.",
-    )
-    parser.add_argument(
         "--compare-polynomial-only",
         action="store_true",
         help="Compare QSP polynomials directly instead of evaluating them on --base.",
@@ -490,7 +451,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         base=args.base,
         expected_polynomial=args.expected_polynomial,
         hermitian_base=args.hermitian_base,
-        compare_polynomial_part=args.compare_polynomial_part,
         compare_polynomial_only=args.compare_polynomial_only,
         tolerance=args.tolerance,
     )
