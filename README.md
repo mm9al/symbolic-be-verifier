@@ -2,7 +2,7 @@
 
 This project is a prototype symbolic verifier for block-encoding circuits.
 
-Artifact DOI: `10.5281/zenodo.TBD`
+Artifact DOI: `10.5281/zenodo.20781657`
 
 For artifact-evaluation instructions, see [ARTIFACT.md](ARTIFACT.md).
 
