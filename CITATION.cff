@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use this artifact, please cite the archived release."
+title: "Symbolic Block-Encoding Verifier"
+version: "1.0.0-artifact"
+date-released: "2026-06-20"
+authors:
+  - name: "mm9al"
+repository-code: "https://github.com/mm9al/symbolic-be-verifier"
+url: "https://github.com/mm9al/symbolic-be-verifier"
+abstract: "Prototype symbolic verifier for checking the top-left block of block-encoding circuits from OpenQASM examples."
+# After archiving the GitHub release on Zenodo, add the assigned DOI here.

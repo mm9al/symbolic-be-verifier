@@ -1,0 +1,6 @@
+benchmark_id,family,n_system,n_ancilla,qasm_path,runtime_sec,status,success,error
+scaling_xstring_n1,scaling_xstring,1,1,benchmarks/generated/scaling_xstring_n1.qasm,0.129175292,PASS,True,
+scaling_xstring_n2,scaling_xstring,2,1,benchmarks/generated/scaling_xstring_n2.qasm,0.023011250,PASS,True,
+scaling_xstring_n4,scaling_xstring,4,1,benchmarks/generated/scaling_xstring_n4.qasm,0.028352292,PASS,True,
+scaling_xstring_n6,scaling_xstring,6,1,benchmarks/generated/scaling_xstring_n6.qasm,0.036010541,PASS,True,
+scaling_xstring_n8,scaling_xstring,8,1,benchmarks/generated/scaling_xstring_n8.qasm,0.041352959,PASS,True,

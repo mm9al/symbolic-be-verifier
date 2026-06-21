@@ -2,6 +2,10 @@
 
 This project is a prototype symbolic verifier for block-encoding circuits.
 
+Artifact DOI: `10.5281/zenodo.TBD`
+
+For artifact-evaluation instructions, see [ARTIFACT.md](ARTIFACT.md).
+
 Given an OpenQASM 2.0 circuit and specified ancilla qubits, the verifier tracks the intermediate state in the form
 
 $$
@@ -17,9 +21,61 @@ Pauli-string multiplication.
 
 The goal is to verify the top-left block of a block-encoding circuit by checking the final all-zero branch $B_{00\cdots0}$.
 
-## Current Goal
+## Quick Start
 
-Support a small OpenQASM subset:
+From a fresh clone:
+
+```bash
+git clone https://github.com/mm9al/symbolic-be-verifier.git
+cd symbolic-be-verifier
+
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+scripts/run_smoke_tests.sh
+```
+
+Expected final line:
+
+```text
+All smoke tests passed.
+```
+
+## Reproducing the Report Results
+
+The raw evaluation CSVs used for the report are included in `data/raw/`.
+Regenerate the plots from those CSVs:
+
+```bash
+python scripts/plot_results.py
+```
+
+Run small reviewer-friendly reruns for the two report questions:
+
+```bash
+python scripts/reproduce_rq1.py
+python scripts/reproduce_rq2.py
+```
+
+These write fresh rerun CSVs under `results/`.
+The full branch/term-growth run can be much longer than the default rerun; see
+[ARTIFACT.md](ARTIFACT.md) for details.
+
+## Artifact Contents
+
+- `symbolic/`: verifier source code.
+- `examples/`: small OpenQASM circuits used by the smoke tests.
+- `benchmarks/`: handwritten and generated benchmark circuits used in the evaluation.
+- `evaluation/`: original benchmark generation, symbolic evaluation, dense baseline, and plotting code.
+- `scripts/`: artifact-facing smoke-test, rerun, and plotting entry points.
+- `data/raw/`: raw CSV data used for the report figures.
+- `results/expected/`: expected plot images archived with the artifact.
+- `tests/`: unit tests for parser, symbolic expressions, scalar simplification, and verification behavior.
+
+## Supported OpenQASM Subset
+
+The verifier supports a small OpenQASM subset:
 
 - h
 - s
@@ -40,7 +96,7 @@ Rotation gates support symbolic and exact angles such as `theta`, `-theta`,
 Print only the final symbolic branches:
 
 ```bash
-.venv/bin/python -m symbolic.verify examples/lcu_x_plus_z.qasm --expected "(X + Z)/2"
+python -m symbolic.verify examples/lcu_x_plus_z.qasm --expected "(X + Z)/2"
 ```
 
 For multiple ancilla and system qubits, pass QASM indices in the order they
@@ -48,7 +104,7 @@ should appear in branch keys and Pauli strings. Quote `q[...]` arguments in
 shells such as zsh, or pass plain integers.
 
 ```bash
-.venv/bin/python -m symbolic.verify examples/two_ancilla_hh.qasm \
+python -m symbolic.verify examples/two_ancilla_hh.qasm \
   --ancillas 'q[0]' 'q[1]' \
   --systems 'q[2]' \
   --expected "I/2" \
@@ -69,7 +125,7 @@ For multiple system qubits, `--systems q[2] q[3]` means `q[2] -> system[0]`
 and `q[3] -> system[1]`, so `X_0 Z_1` means `X` on `q[2]` and `Z` on `q[3]`.
 
 ```bash
-.venv/bin/python -m symbolic.verify examples/lcu_xx_plus_zz.qasm \
+python -m symbolic.verify examples/lcu_xx_plus_zz.qasm \
   --systems 1 2 \
   --expected "(X0 X1 + Z0 Z1)/2"
 ```
@@ -77,7 +133,7 @@ and `q[3] -> system[1]`, so `X_0 Z_1` means `X` on `q[2]` and `Z` on `q[3]`.
 Rotation-gate example with a symbolic angle:
 
 ```bash
-.venv/bin/python -m symbolic.verify examples/rz_ancilla_theta_sandwich.qasm \
+python -m symbolic.verify examples/rz_ancilla_theta_sandwich.qasm \
   --expected "cos(theta/2) I" \
   --trace
 ```
@@ -85,7 +141,7 @@ Rotation-gate example with a symbolic angle:
 Print every intermediate update:
 
 ```bash
-.venv/bin/python -m symbolic.verify examples/lcu_x_plus_z.qasm --expected "(X + Z)/2" --trace
+python -m symbolic.verify examples/lcu_x_plus_z.qasm --expected "(X + Z)/2" --trace
 ```
 
 For multi-ancilla circuits, trace output is sparse and branch-oriented:

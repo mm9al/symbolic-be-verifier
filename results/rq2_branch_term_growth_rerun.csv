@@ -1,0 +1,5 @@
+benchmark_id,family,n_system,n_ancilla,expected_terms,qasm_path,runtime_sec,status,success,error
+branch_term_product_m1,branch_term_product,1,1,2,benchmarks/generated/branch_term_product_m1.qasm,0.178585542,PASS,True,
+branch_term_product_m2,branch_term_product,2,2,4,benchmarks/generated/branch_term_product_m2.qasm,0.234593375,PASS,True,
+branch_term_product_m3,branch_term_product,3,3,8,benchmarks/generated/branch_term_product_m3.qasm,0.680499709,PASS,True,
+branch_term_product_m4,branch_term_product,4,4,16,benchmarks/generated/branch_term_product_m4.qasm,2.566397917,PASS,True,
