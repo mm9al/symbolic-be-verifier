@@ -1,5 +1,8 @@
 {
-  "block_ancilla": "q[1]",
+  "assumption": "real block encoding: UH = UHdg",
+  "block_ancillas": [
+    "q[1]"
+  ],
   "comparison": "full polynomial",
   "ensure_bounded": true,
   "epsilon": 0.0001,
@@ -22,11 +25,11 @@
         "symbolic.verify",
         "examples/qsp_hamsim_t05_eps1e-4/qsp_hamsim_cos_selector_t05_eps1e-4_deg4.qasm",
         "--ancillas",
-        "q[3]",
         "q[0]",
         "q[1]",
-        "--systems",
         "q[2]",
+        "--systems",
+        "q[3]",
         "--expected-polynomial",
         "0.49999966355545339 - 0.062493938728279574*x^2 + 0.0012858918109143005*x^4",
         "--hermitian-base",
@@ -52,11 +55,11 @@
         "symbolic.verify",
         "examples/qsp_hamsim_t05_eps1e-4/qsp_hamsim_sin_selector_t05_eps1e-4_deg5.qasm",
         "--ancillas",
-        "q[3]",
         "q[0]",
         "q[1]",
-        "--systems",
         "q[2]",
+        "--systems",
+        "q[3]",
         "--expected-polynomial",
         "0.24999991579484243*x - 0.010415992523176125*x^3 + 0.00012885803586171963*x^5",
         "--hermitian-base",
@@ -66,7 +69,9 @@
   ],
   "phase_qubit": "q[0]",
   "scale": 0.5,
-  "selector_qubit": "q[3]",
-  "system_qubit": "q[2]",
+  "selector_qubit": "q[2]",
+  "system_qubits": [
+    "q[3]"
+  ],
   "tau": 0.5
 }

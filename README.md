@@ -132,10 +132,19 @@ examples/qsp_hamsim_t05_eps1e-4/
 ```
 
 The original pyqsp component circuits place the target polynomial in the
-imaginary part of the top-left block. The selector examples add `q[3]`, run the
+imaginary part of the top-left block. The selector examples add `q[m+1]`, run the
 `theta` and `-theta` branches coherently, extract their difference, multiply by
 `-i`, and move the result to the all-zero branch. The final block is therefore
 directly `P_cos(H)` or `P_sin(H)`, so the verifier compares the full polynomial.
+
+QSP selector examples use one layout for every `m >= 1`:
+
+```text
+q[0]       = QSP phase ancilla
+q[1..m]    = block-encoding ancillas of U_H
+q[m+1]     = selector / realification ancilla
+q[m+2..]   = system qubits
+```
 
 The QASM files still keep pyqsp phases separate from physical OpenQASM rotation
 angles. They first convert pyqsp's Wx phases to QSVT projector phases, then
@@ -153,8 +162,8 @@ instead of evaluating the polynomial on `--base`.
 
 ```bash
 .venv/bin/python -m symbolic.verify examples/qsp_hamsim_t05_eps1e-4/qsp_hamsim_cos_selector_t05_eps1e-4_deg4.qasm \
-  --ancillas 'q[3]' 'q[0]' 'q[1]' \
-  --systems 'q[2]' \
+  --ancillas 'q[0]' 'q[1]' 'q[2]' \
+  --systems 'q[3]' \
   --expected-polynomial '0.49999966355545339 - 0.062493938728279574*x^2 + 0.0012858918109143005*x^4' \
   --hermitian-base \
   --compare-polynomial-only
@@ -162,21 +171,21 @@ instead of evaluating the polynomial on `--base`.
 
 ```bash
 .venv/bin/python -m symbolic.verify examples/qsp_hamsim_t05_eps1e-4/qsp_hamsim_sin_selector_t05_eps1e-4_deg5.qasm \
-  --ancillas 'q[3]' 'q[0]' 'q[1]' \
-  --systems 'q[2]' \
+  --ancillas 'q[0]' 'q[1]' 'q[2]' \
+  --systems 'q[3]' \
   --expected-polynomial '0.24999991579484243*x - 0.010415992523176125*x^3 + 0.00012885803586171963*x^5' \
   --hermitian-base \
   --compare-polynomial-only
 ```
 
-The checked-in `examples/qsp_hamsim_t05_eps1e-4` fixture is the regression case
-for one block ancilla:
+The checked-in `examples/qsp_hamsim_t05_eps1e-4` fixture is the `m = 1`
+regression case:
 
 ```text
 phase ancilla     q[0]
 block ancilla     q[1]
-system qubit      q[2]
-selector ancilla  q[3]
+selector ancilla  q[2]
+system qubit      q[3]
 ```
 
 Run the regression with:
@@ -185,25 +194,15 @@ Run the regression with:
 .venv/bin/python -m pytest tests/test_qsp.py
 ```
 
-This verifies that both checked-in selector circuits still synthesize and
-verify as:
+This verifies that both checked-in selector circuits still synthesize and verify
+as:
 
 ```text
 m = 1 block ancilla -> qsp cos/sin synthesis PASS
 ```
 
-The checked-in `examples/qsp_hamsim_t05_eps1e-4_m2` fixture is the first
-multi-block-ancilla cos/sin regression. It uses the fixed multi-ancilla QSP
-layout:
-
-```text
-q[0]       = QSP phase ancilla
-q[1..m]    = block-encoding ancillas of U_H
-q[m+1]     = selector / realification ancilla
-q[m+2..]   = system qubits
-```
-
-For `m = 2`, this is:
+The checked-in `examples/qsp_hamsim_t05_eps1e-4_m2` fixture is the `m = 2`
+cos/sin regression:
 
 ```text
 phase ancilla     q[0]
@@ -212,10 +211,10 @@ selector ancilla  q[3]
 system qubit      q[4]
 ```
 
-Run the multi-ancilla cos/sin regression with:
+Run the shared cos/sin regression with:
 
 ```bash
-.venv/bin/python -m pytest tests/test_qsp.py::test_multi_block_ancilla_qsp_cos_sin_regression_passes
+.venv/bin/python -m pytest tests/test_qsp.py::test_qsp_cos_sin_regression_passes_for_block_ancillas
 ```
 
 Generate fresh multi-ancilla selector examples with pyqsp available:
@@ -274,14 +273,13 @@ UHdg q[block_0], q[block_1], ..., q[system_0], ...;
 ```
 
 In word mode, the verifier tracks the all-zero block subspace and abstracts the
-orthogonal block-ancilla subspace as one complement. This is enough for the
-first multi-ancilla QSP regression before adding a physical decomposition pass.
+orthogonal block-ancilla subspace as one complement. The same implementation is
+used for every `m >= 1`.
 
 Run the abstract QSP regressions with:
 
 ```bash
-.venv/bin/python -m pytest tests/test_qsp.py::test_qsp_mcx_m1_regression_matches_t3 \
-  tests/test_qsp.py::test_qsp_mcx_m2_t3_passes
+.venv/bin/python -m pytest tests/test_qsp.py::test_qsp_mcx_t3_passes_for_block_ancillas
 ```
 
 For debugging the raw component data without writing files:

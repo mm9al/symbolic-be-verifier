@@ -108,6 +108,8 @@ def _print_qasm_snippet(record: dict[str, Any], qasm_args: argparse.Namespace) -
         print("QASM snippet skipped because --no-angles was used.")
         return
 
+    block_ancillas = _block_ancillas_from_args(qasm_args)
+    system_qubits = _system_qubits_from_args(qasm_args)
     print("QASM snippet:")
     if "selector_component" in record:
         print(
@@ -117,10 +119,8 @@ def _print_qasm_snippet(record: dict[str, Any], qasm_args: argparse.Namespace) -
                 record["qasm_rz_angles"],
                 selector_qubit=qasm_args.selector_qubit,
                 phase_qubit=qasm_args.phase_qubit,
-                block_ancilla=qasm_args.block_ancilla,
-                system_qubit=qasm_args.system_qubit,
-                block_ancillas=qasm_args.block_ancillas,
-                system_qubits=qasm_args.system_qubits,
+                block_ancillas=block_ancillas,
+                system_qubits=system_qubits,
                 signal_gate=qasm_args.signal_gate,
                 signal_gate_dagger=qasm_args.signal_gate_dagger,
             )
@@ -133,10 +133,8 @@ def _print_qasm_snippet(record: dict[str, Any], qasm_args: argparse.Namespace) -
             record["qsvt_projector_phases"],
             record["qasm_rz_angles"],
             phase_qubit=qasm_args.phase_qubit,
-            block_ancilla=qasm_args.block_ancilla,
-            system_qubit=qasm_args.system_qubit,
-            block_ancillas=qasm_args.block_ancillas,
-            system_qubits=qasm_args.system_qubits,
+            block_ancillas=block_ancillas,
+            system_qubits=system_qubits,
             signal_gate=qasm_args.signal_gate,
             signal_gate_dagger=qasm_args.signal_gate_dagger,
         )
@@ -233,6 +231,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     if args.write_examples:
+        block_ancillas = _block_ancillas_from_args(args)
+        system_qubits = _system_qubits_from_args(args)
         metadata = write_selector_examples(
             tau=args.tau,
             epsilon=args.epsilon,
@@ -243,10 +243,8 @@ def main() -> int:
             examples_dir=args.examples_dir,
             selector_qubit=args.selector_qubit,
             phase_qubit=args.phase_qubit,
-            block_ancilla=args.block_ancilla,
-            system_qubit=args.system_qubit,
-            block_ancillas=args.block_ancillas,
-            system_qubits=args.system_qubits,
+            block_ancillas=block_ancillas,
+            system_qubits=system_qubits,
             signal_gate=args.signal_gate,
             signal_gate_dagger=args.signal_gate_dagger,
         )
@@ -311,6 +309,14 @@ def _generate_records(args: argparse.Namespace) -> list[dict[str, Any]]:
         )
         for component in components
     ]
+
+
+def _block_ancillas_from_args(args: argparse.Namespace) -> list[str]:
+    return args.block_ancillas if args.block_ancillas is not None else [args.block_ancilla]
+
+
+def _system_qubits_from_args(args: argparse.Namespace) -> list[str]:
+    return args.system_qubits if args.system_qubits is not None else [args.system_qubit]
 
 
 if __name__ == "__main__":

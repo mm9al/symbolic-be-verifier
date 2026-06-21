@@ -219,8 +219,6 @@ class BranchState:
             raise UnsupportedGateError(f"{name} must include at least one block ancilla and one system qubit")
         if len(set(block_indices)) != len(block_indices):
             raise UnsupportedGateError(f"{name} has duplicate block ancilla operands")
-        if len(block_indices) == 1:
-            return self._apply_uh(block_indices[0], dagger=(name == "uhdg"))
         return self._apply_multi_uh(block_indices, dagger=(name == "uhdg"))
 
     def _apply_mcx_gate(self, qubits: Tuple[int, ...], *, ancillas: Tuple[int, ...]) -> "BranchState":
@@ -235,8 +233,6 @@ class BranchState:
             raise UnsupportedGateError("mcx target cannot also be a control")
         if len(set(controls)) != len(controls):
             raise UnsupportedGateError("mcx controls must be distinct")
-        if len(controls) == 1:
-            return self._apply_cx_ancilla_to_ancilla(controls[0], target_index)
         return self._apply_mcx_ancilla_to_ancilla(controls, target_index)
 
     def _apply_ancilla_matrix(self, ancilla_index: int, matrix: Tuple[Tuple[sp.Expr, sp.Expr], Tuple[sp.Expr, sp.Expr]]) -> "BranchState":
@@ -306,35 +302,6 @@ class BranchState:
         new: Dict[BranchKey, BranchValue] = {}
         for key, branch in self.branches.items():
             new[key] = -branch if key[left_index] == 1 and key[right_index] == 1 else branch
-        return self._replace(new)
-
-    def _apply_uh(self, ancilla_index: int, *, dagger: bool) -> "BranchState":
-        if self.expression_kind != "word":
-            raise UnsupportedGateError("UH/UHdg requires QSP word mode")
-
-        if dagger:
-            top_left, top_right, bottom_left, bottom_right = "Hd", "Ad", "Gd", "Cd"
-        else:
-            top_left, top_right, bottom_left, bottom_right = "H", "G", "A", "C"
-
-        new: Dict[BranchKey, BranchValue] = {}
-        processed = set()
-        relevant_keys = set(self.branches)
-        relevant_keys.update(_set_bit(key, ancilla_index, 1 - key[ancilla_index]) for key in self.branches)
-
-        for key in sorted(relevant_keys):
-            key0 = _set_bit(key, ancilla_index, 0)
-            key1 = _set_bit(key, ancilla_index, 1)
-            if key0 in processed:
-                continue
-
-            branch0 = self.branch(key0)
-            branch1 = self.branch(key1)
-            new[key0] = word_atom(top_left) * branch0 + word_atom(top_right) * branch1
-            new[key1] = word_atom(bottom_left) * branch0 + word_atom(bottom_right) * branch1
-            processed.add(key0)
-            processed.add(key1)
-
         return self._replace(new)
 
     def _apply_multi_uh(self, block_indices: Tuple[int, ...], *, dagger: bool) -> "BranchState":
