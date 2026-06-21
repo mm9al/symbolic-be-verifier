@@ -63,3 +63,18 @@ def test_parse_opaque_declarations_are_ignored_and_uh_gates_are_kept():
 
     assert [gate.name for gate in gates] == ["uh", "uhdg"]
     assert [gate.qubits for gate in gates] == [(1, 2), (1, 2)]
+
+
+def test_parse_abstract_mcx_with_multiple_controls():
+    gates = parse_qasm_text(
+        """
+        OPENQASM 2.0;
+        qreg q[4];
+        mcx q[1], q[2], q[0];
+        """
+    )
+
+    assert len(gates) == 1
+    assert gates[0].name == "mcx"
+    assert gates[0].qubits == (1, 2, 0)
+    assert gates[0].parameter is None

@@ -8,6 +8,7 @@ from symbolic.verify import PASS, polynomial_close, verify_qasm_file
 
 ROOT = Path(__file__).parents[1]
 QSP_EXAMPLE_DIR = ROOT / "examples" / "qsp_hamsim_t05_eps1e-4"
+QSP_M2_EXAMPLE_DIR = ROOT / "examples" / "qsp_hamsim_t05_eps1e-4_m2"
 
 
 def test_phase_conversion_uses_qsvt_projector_convention():
@@ -53,6 +54,68 @@ def test_single_block_ancilla_qsp_cos_sin_regression_passes():
         assert polynomial_close(result.qsp_polynomial, file_record["polynomial"])
 
     assert seen_components == {"cos", "sin"}
+
+
+def test_multi_block_ancilla_qsp_cos_sin_regression_passes():
+    metadata = json.loads((QSP_M2_EXAMPLE_DIR / "expected_polynomials.json").read_text(encoding="utf-8"))
+
+    assert metadata["phase_qubit"] == "q[0]"
+    assert metadata["block_ancillas"] == ["q[1]", "q[2]"]
+    assert metadata["selector_qubit"] == "q[3]"
+    assert metadata["system_qubits"] == ["q[4]"]
+
+    ancillas = (
+        _parse_qreg(metadata["phase_qubit"]),
+        *(_parse_qreg(qubit) for qubit in metadata["block_ancillas"]),
+        _parse_qreg(metadata["selector_qubit"]),
+    )
+    systems = tuple(_parse_qreg(qubit) for qubit in metadata["system_qubits"])
+
+    seen_components = set()
+    for file_record in metadata["files"]:
+        seen_components.add(file_record["component"])
+        result = verify_qasm_file(
+            ROOT / file_record["qasm"],
+            ancillas=ancillas,
+            systems=systems,
+            expected_polynomial=file_record["polynomial"],
+            hermitian_base=True,
+            compare_polynomial_only=True,
+        )
+
+        assert result.status == PASS
+        assert result.qsp_polynomial_only is True
+        assert polynomial_close(result.qsp_polynomial, file_record["polynomial"])
+
+    assert seen_components == {"cos", "sin"}
+
+
+def test_qsp_mcx_m1_regression_matches_t3():
+    result = verify_qasm_file(
+        ROOT / "examples" / "qsp_t3_mcx_m1.qasm",
+        ancillas=(0, 1),
+        systems=(2,),
+        expected_polynomial="4*x^3 - 3*x",
+        hermitian_base=True,
+        compare_polynomial_only=True,
+    )
+
+    assert result.status == PASS
+    assert polynomial_close(result.qsp_polynomial, "4*x^3 - 3*x")
+
+
+def test_qsp_mcx_m2_t3_passes():
+    result = verify_qasm_file(
+        ROOT / "examples" / "qsp_t3_mcx_m2.qasm",
+        ancillas=(0, 1, 2),
+        systems=(3,),
+        expected_polynomial="4*x^3 - 3*x",
+        hermitian_base=True,
+        compare_polynomial_only=True,
+    )
+
+    assert result.status == PASS
+    assert polynomial_close(result.qsp_polynomial, "4*x^3 - 3*x")
 
 
 def _parse_qreg(qubit: str) -> int:

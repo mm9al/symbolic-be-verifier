@@ -192,6 +192,98 @@ verify as:
 m = 1 block ancilla -> qsp cos/sin synthesis PASS
 ```
 
+The checked-in `examples/qsp_hamsim_t05_eps1e-4_m2` fixture is the first
+multi-block-ancilla cos/sin regression. It uses the fixed multi-ancilla QSP
+layout:
+
+```text
+q[0]       = QSP phase ancilla
+q[1..m]    = block-encoding ancillas of U_H
+q[m+1]     = selector / realification ancilla
+q[m+2..]   = system qubits
+```
+
+For `m = 2`, this is:
+
+```text
+phase ancilla     q[0]
+block ancillas    q[1], q[2]
+selector ancilla  q[3]
+system qubit      q[4]
+```
+
+Run the multi-ancilla cos/sin regression with:
+
+```bash
+.venv/bin/python -m pytest tests/test_qsp.py::test_multi_block_ancilla_qsp_cos_sin_regression_passes
+```
+
+Generate fresh multi-ancilla selector examples with pyqsp available:
+
+```bash
+python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --write-examples \
+  --block-ancillas 'q[1]' 'q[2]' \
+  --selector-qubit 'q[3]' \
+  --system-qubits 'q[4]'
+```
+
+The current multi-ancilla cos/sin verifier path assumes a real block encoding,
+so `U_H = U_H^*`. Gates that require complex conjugation behavior, such as
+system-level `Y`, `S`, or `Sdg` inside `U_H`, are intentionally out of scope for
+this checkpoint.
+
+## Abstract Multi-Control QSP
+
+The verifier supports a verifier-only abstract multi-controlled X gate:
+
+```qasm
+mcx q[control_0], q[control_1], ..., q[target];
+```
+
+The final operand is the target ancilla. All preceding operands are control
+ancillas. This gate is not decomposed into OpenQASM basis gates yet; it directly
+permutes symbolic branches by flipping the target exactly when all controls are
+`1`.
+
+Multi-block-ancilla QSP keeps the same circuit shape as
+`examples/qsp_t3_opaque.qasm`. The zero-control phase sandwich is written with
+explicit `x` gates around `mcx`:
+
+```qasm
+x q[block_0];
+x q[block_1];
+mcx q[block_0], q[block_1], q[phase];
+rz(theta) q[phase];
+mcx q[block_0], q[block_1], q[phase];
+x q[block_1];
+x q[block_0];
+```
+
+This implements the QSP phase split:
+
+```text
+block register = |0...0>  -> Rz(-theta) on the phase ancilla
+otherwise                 -> Rz(theta) on the phase ancilla
+```
+
+Multi-ancilla `UH`/`UHdg` gates are accepted as abstract block encodings:
+
+```qasm
+UH q[block_0], q[block_1], ..., q[system_0], ...;
+UHdg q[block_0], q[block_1], ..., q[system_0], ...;
+```
+
+In word mode, the verifier tracks the all-zero block subspace and abstracts the
+orthogonal block-ancilla subspace as one complement. This is enough for the
+first multi-ancilla QSP regression before adding a physical decomposition pass.
+
+Run the abstract QSP regressions with:
+
+```bash
+.venv/bin/python -m pytest tests/test_qsp.py::test_qsp_mcx_m1_regression_matches_t3 \
+  tests/test_qsp.py::test_qsp_mcx_m2_t3_passes
+```
+
 For debugging the raw component data without writing files:
 
 ```bash

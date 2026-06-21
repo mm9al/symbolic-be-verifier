@@ -83,17 +83,21 @@ def qasm_snippet(
     qasm_rz_angles: list[float],
     *,
     phase_qubit: str,
-    block_ancilla: str,
-    system_qubit: str,
+    block_ancilla: str | None = None,
+    system_qubit: str | None = None,
+    block_ancillas: list[str] | None = None,
+    system_qubits: list[str] | None = None,
     signal_gate: str,
     signal_gate_dagger: str,
 ) -> str:
+    block_ancillas = _normalize_qubit_list(block_ancillas, fallback=block_ancilla, label="block ancilla")
+    system_qubits = _normalize_qubit_list(system_qubits, fallback=system_qubit, label="system qubit")
     lines: list[str] = []
     for idx, (phase, psi, theta) in enumerate(zip(pyqsp_phases, qsvt_projector_phases, qasm_rz_angles)):
         lines.append(f"// phi_{idx} = {phase:.12g}")
         lines.append(f"// psi_{idx} = {psi:.12g}")
         lines.append(f"// theta_rz_{idx} = -2 * psi_{idx} = {theta:.12g}")
-        lines.extend(_phase_block(theta, phase_qubit, block_ancilla))
+        lines.extend(_phase_block(theta, phase_qubit, block_ancillas))
         if idx == len(pyqsp_phases) - 1:
             continue
 
@@ -102,7 +106,7 @@ def qasm_snippet(
         label = "U^\\dagger" if use_dagger else "U"
         lines.append("")
         lines.append(f"// {label}")
-        lines.append(f"{gate} {block_ancilla}, {system_qubit};")
+        lines.append(f"{gate} {_format_gate_operands([*block_ancillas, *system_qubits])};")
         lines.append("")
     return "\n".join(lines)
 
@@ -114,11 +118,15 @@ def selector_qasm_snippet(
     *,
     selector_qubit: str,
     phase_qubit: str,
-    block_ancilla: str,
-    system_qubit: str,
+    block_ancilla: str | None = None,
+    system_qubit: str | None = None,
+    block_ancillas: list[str] | None = None,
+    system_qubits: list[str] | None = None,
     signal_gate: str,
     signal_gate_dagger: str,
 ) -> str:
+    block_ancillas = _normalize_qubit_list(block_ancillas, fallback=block_ancilla, label="block ancilla")
+    system_qubits = _normalize_qubit_list(system_qubits, fallback=system_qubit, label="system qubit")
     lines: list[str] = []
     lines.append(f"h {selector_qubit};")
     lines.append("")
@@ -127,7 +135,7 @@ def selector_qasm_snippet(
         lines.append(f"// psi_{idx} = {psi:.12g}")
         lines.append(f"// solid-control theta_{idx} = {theta:.12g}")
         lines.append(f"// open-control SELECT_RZ theta_{idx} = {-theta:.12g}")
-        lines.extend(_selector_phase_block(theta, selector_qubit, phase_qubit, block_ancilla))
+        lines.extend(_selector_phase_block(theta, selector_qubit, phase_qubit, block_ancillas))
         if idx == len(pyqsp_phases) - 1:
             continue
 
@@ -136,7 +144,7 @@ def selector_qasm_snippet(
         label = "U^\\dagger" if use_dagger else "U"
         lines.append("")
         lines.append(f"// {label}")
-        lines.append(f"{gate} {block_ancilla}, {system_qubit};")
+        lines.append(f"{gate} {_format_gate_operands([*block_ancillas, *system_qubits])};")
         lines.append("")
 
     lines.append("")
@@ -152,13 +160,17 @@ def selector_qasm_file(
     precision: int,
     selector_qubit: str,
     phase_qubit: str,
-    block_ancilla: str,
-    system_qubit: str,
+    block_ancilla: str | None = None,
+    system_qubit: str | None = None,
+    block_ancillas: list[str] | None = None,
+    system_qubits: list[str] | None = None,
     signal_gate: str,
     signal_gate_dagger: str,
 ) -> str:
+    block_ancillas = _normalize_qubit_list(block_ancillas, fallback=block_ancilla, label="block ancilla")
+    system_qubits = _normalize_qubit_list(system_qubits, fallback=system_qubit, label="system qubit")
     component = record["selector_component"]
-    qreg_size = _qreg_size(selector_qubit, phase_qubit, block_ancilla, system_qubit)
+    qreg_size = _qreg_size(selector_qubit, phase_qubit, *block_ancillas, *system_qubits)
     polynomial = polynomial_expr(record["monomial_coefficients"], "x", precision)
     snippet = selector_qasm_snippet(
         record["pyqsp_phases"],
@@ -166,26 +178,31 @@ def selector_qasm_file(
         record["qasm_rz_angles"],
         selector_qubit=selector_qubit,
         phase_qubit=phase_qubit,
-        block_ancilla=block_ancilla,
-        system_qubit=system_qubit,
+        block_ancillas=block_ancillas,
+        system_qubits=system_qubits,
         signal_gate=signal_gate,
         signal_gate_dagger=signal_gate_dagger,
     )
     phase_lines = "\n".join(f"//   phi_{idx} = {phase:.17g}" for idx, phase in enumerate(record["pyqsp_phases"]))
     theta_lines = "\n".join(f"//   theta_{idx} = {theta:.17g}" for idx, theta in enumerate(record["qasm_rz_angles"]))
+    block_comment = "\n".join(f"// {qubit} = block-encoding ancilla[{index}]" for index, qubit in enumerate(block_ancillas))
+    system_comment = "\n".join(f"// {qubit} = system qubit[{index}]" for index, qubit in enumerate(system_qubits))
+    signal_signature = _opaque_signature([f"a{index}" for index in range(len(block_ancillas))], [f"s{index}" for index in range(len(system_qubits))])
+    mcx_signature = _opaque_signature([f"c{index}" for index in range(len(block_ancillas))], ["t"])
 
     return f"""OPENQASM 2.0;
 include "qelib1.inc";
 
-opaque {signal_gate} a, s;
-opaque {signal_gate_dagger} a, s;
+opaque {signal_gate} {signal_signature};
+opaque {signal_gate_dagger} {signal_signature};
+opaque mcx {mcx_signature};
 
 qreg q[{qreg_size}];
 
 // {phase_qubit} = phase ancilla
-// {block_ancilla} = block-encoding ancilla
-// {system_qubit} = system qubit
+{block_comment}
 // {selector_qubit} = selector ancilla
+{system_comment}
 
 // Selector-wrapped Hamiltonian simulation {component} component.
 // Generated by tools/hamsim_qsp.py with:
@@ -202,8 +219,9 @@ qreg q[{qreg_size}];
 // final all-zero branch is directly P_{component}(H), so the verifier compares
 // the full polynomial.
 //
-// Open-control CNOTs on the block ancilla are expanded with x gates and h-cz-h.
-// This matches the paper convention that phases act on the |0> branch.
+// Open-control multi-controlled X gates on the block ancillas are expanded
+// with x gates around abstract mcx. This matches the paper convention that
+// phases act on the |0...0> block-ancilla branch.
 //
 // P_{component}(x) = {polynomial}
 //
@@ -224,9 +242,13 @@ def verification_command(
     precision: int,
     selector_qubit: str,
     phase_qubit: str,
-    block_ancilla: str,
-    system_qubit: str,
+    block_ancilla: str | None = None,
+    system_qubit: str | None = None,
+    block_ancillas: list[str] | None = None,
+    system_qubits: list[str] | None = None,
 ) -> list[str]:
+    block_ancillas = _normalize_qubit_list(block_ancillas, fallback=block_ancilla, label="block ancilla")
+    system_qubits = _normalize_qubit_list(system_qubits, fallback=system_qubit, label="system qubit")
     polynomial = polynomial_expr(record["monomial_coefficients"], "x", precision)
     return [
         ".venv/bin/python",
@@ -234,11 +256,11 @@ def verification_command(
         "symbolic.verify",
         str(qasm_path),
         "--ancillas",
-        selector_qubit,
         phase_qubit,
-        block_ancilla,
+        *block_ancillas,
+        selector_qubit,
         "--systems",
-        system_qubit,
+        *system_qubits,
         "--expected-polynomial",
         polynomial,
         "--hermitian-base",
@@ -257,16 +279,21 @@ def write_selector_examples(
     examples_dir: Path,
     selector_qubit: str,
     phase_qubit: str,
-    block_ancilla: str,
-    system_qubit: str,
+    block_ancilla: str | None = None,
+    system_qubit: str | None = None,
+    block_ancillas: list[str] | None = None,
+    system_qubits: list[str] | None = None,
     signal_gate: str,
     signal_gate_dagger: str,
 ) -> dict[str, Any]:
     if method != "sym_qsp" or signal_operator != "Wx":
         raise ValueError("--write-examples currently expects --method sym_qsp --signal-operator Wx")
 
+    block_ancillas = _normalize_qubit_list(block_ancillas, fallback=block_ancilla, label="block ancilla")
+    system_qubits = _normalize_qubit_list(system_qubits, fallback=system_qubit, label="system qubit")
     tag = example_tag(tau, epsilon)
-    output_dir = examples_dir / f"qsp_hamsim_{tag}"
+    suffix = "" if len(block_ancillas) == 1 else f"_m{len(block_ancillas)}"
+    output_dir = examples_dir / f"qsp_hamsim_{tag}{suffix}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     records = [
@@ -292,8 +319,8 @@ def write_selector_examples(
             precision=precision,
             selector_qubit=selector_qubit,
             phase_qubit=phase_qubit,
-            block_ancilla=block_ancilla,
-            system_qubit=system_qubit,
+            block_ancillas=block_ancillas,
+            system_qubits=system_qubits,
             signal_gate=signal_gate,
             signal_gate_dagger=signal_gate_dagger,
         )
@@ -312,8 +339,8 @@ def write_selector_examples(
                     precision=precision,
                     selector_qubit=selector_qubit,
                     phase_qubit=phase_qubit,
-                    block_ancilla=block_ancilla,
-                    system_qubit=system_qubit,
+                    block_ancillas=block_ancillas,
+                    system_qubits=system_qubits,
                 ),
             }
         )
@@ -325,11 +352,15 @@ def write_selector_examples(
         "scale": records[0]["scale"],
         "selector_qubit": selector_qubit,
         "phase_qubit": phase_qubit,
-        "block_ancilla": block_ancilla,
-        "system_qubit": system_qubit,
+        "block_ancillas": block_ancillas,
+        "system_qubits": system_qubits,
         "comparison": "full polynomial",
         "files": files,
     }
+    if len(block_ancillas) == 1:
+        metadata["block_ancilla"] = block_ancillas[0]
+    if len(system_qubits) == 1:
+        metadata["system_qubit"] = system_qubits[0]
     metadata_path = output_dir / "expected_polynomials.json"
     metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     metadata["metadata"] = str(metadata_path)
@@ -532,16 +563,12 @@ def _load_pyqsp() -> tuple[Any, Any, Any, Any]:
     return np, QuantumSignalProcessingPhases, PolyCosineTX, PolySineTX
 
 
-def _phase_block(angle: float, phase_qubit: str, block_ancilla: str) -> list[str]:
+def _phase_block(angle: float, phase_qubit: str, block_ancillas: list[str]) -> list[str]:
     angle_text = f"{angle:.12g}"
     return [
-        f"h {phase_qubit};",
-        f"cz {phase_qubit}, {block_ancilla};",
-        f"h {phase_qubit};",
+        *_open_mcx_block(block_ancillas, phase_qubit),
         f"rz({angle_text}) {phase_qubit};",
-        f"h {phase_qubit};",
-        f"cz {phase_qubit}, {block_ancilla};",
-        f"h {phase_qubit};",
+        *_open_mcx_block(block_ancillas, phase_qubit),
     ]
 
 
@@ -563,23 +590,43 @@ def _select_rz(angle: float, selector_qubit: str, phase_qubit: str) -> list[str]
     ]
 
 
-def _open_cx_block(block_ancilla: str, phase_qubit: str) -> list[str]:
+def _open_mcx_block(block_ancillas: list[str], phase_qubit: str) -> list[str]:
+    controls = ", ".join([*block_ancillas, phase_qubit])
     return [
-        f"x {block_ancilla};",
-        f"h {phase_qubit};",
-        f"cz {phase_qubit}, {block_ancilla};",
-        f"h {phase_qubit};",
-        f"x {block_ancilla};",
+        *(f"x {block_ancilla};" for block_ancilla in block_ancillas),
+        f"mcx {controls};",
+        *(f"x {block_ancilla};" for block_ancilla in reversed(block_ancillas)),
     ]
 
 
-def _selector_phase_block(angle: float, selector_qubit: str, phase_qubit: str, block_ancilla: str) -> list[str]:
+def _selector_phase_block(angle: float, selector_qubit: str, phase_qubit: str, block_ancillas: list[str]) -> list[str]:
     open_control_angle = -angle
     return [
-        *_open_cx_block(block_ancilla, phase_qubit),
+        *_open_mcx_block(block_ancillas, phase_qubit),
         *_select_rz(open_control_angle, selector_qubit, phase_qubit),
-        *_open_cx_block(block_ancilla, phase_qubit),
+        *_open_mcx_block(block_ancillas, phase_qubit),
     ]
+
+
+def _normalize_qubit_list(values: list[str] | None, *, fallback: str | None, label: str) -> list[str]:
+    if values is None:
+        if fallback is None:
+            raise ValueError(f"At least one {label} is required")
+        values = [fallback]
+    normalized = [value.strip() for value in values]
+    if not normalized:
+        raise ValueError(f"At least one {label} is required")
+    if len(set(normalized)) != len(normalized):
+        raise ValueError(f"Duplicate {label}s are not allowed: {normalized}")
+    return normalized
+
+
+def _format_gate_operands(qubits: list[str]) -> str:
+    return ", ".join(qubits)
+
+
+def _opaque_signature(ancilla_args: list[str], system_args: list[str]) -> str:
+    return ", ".join([*ancilla_args, *system_args])
 
 
 def _qubit_index(qubit: str) -> int:

@@ -123,6 +123,12 @@ class BranchState:
         if len(system_qubits) != self.num_system_qubits:
             raise ValueError(f"State has {self.num_system_qubits} system qubits, got mapping {system_qubits}")
 
+        if name in {"uh", "uhdg"}:
+            return self._apply_block_encoding_gate(name, gate.qubits, ancillas=ancilla_qubits, systems=system_qubits)
+
+        if name == "mcx":
+            return self._apply_mcx_gate(gate.qubits, ancillas=ancilla_qubits)
+
         if len(gate.qubits) == 1:
             return self._apply_single_qubit(
                 name,
@@ -168,11 +174,6 @@ class BranchState:
         left_system = _qubit_index(left, systems)
         right_system = _qubit_index(right, systems)
 
-        if name in {"uh", "uhdg"}:
-            if left_ancilla is None or right_system is None:
-                raise UnsupportedGateError(f"{name} must be applied as UH ancilla, system")
-            return self._apply_uh(left_ancilla, dagger=(name == "uhdg"))
-
         if name == "cx":
             if left_ancilla is not None and right_system is not None:
                 gate_op = pauli("X", index=right_system, num_qubits=self.num_system_qubits)
@@ -199,6 +200,44 @@ class BranchState:
             raise UnsupportedGateError("cz must act on known ancilla/system qubits")
 
         raise UnsupportedGateError(f"Unsupported two-qubit gate: {name}")
+
+    def _apply_block_encoding_gate(
+        self,
+        name: str,
+        qubits: Tuple[int, ...],
+        *,
+        ancillas: Tuple[int, ...],
+        systems: Tuple[int, ...],
+    ) -> "BranchState":
+        block_indices = tuple(index for qubit in qubits if (index := _qubit_index(qubit, ancillas)) is not None)
+        system_indices = tuple(index for qubit in qubits if (index := _qubit_index(qubit, systems)) is not None)
+        unknown = tuple(qubit for qubit in qubits if _qubit_index(qubit, ancillas) is None and _qubit_index(qubit, systems) is None)
+
+        if unknown:
+            raise UnsupportedGateError(f"{name} operands must be known ancilla/system qubits: {qubits}")
+        if not block_indices or not system_indices:
+            raise UnsupportedGateError(f"{name} must include at least one block ancilla and one system qubit")
+        if len(set(block_indices)) != len(block_indices):
+            raise UnsupportedGateError(f"{name} has duplicate block ancilla operands")
+        if len(block_indices) == 1:
+            return self._apply_uh(block_indices[0], dagger=(name == "uhdg"))
+        return self._apply_multi_uh(block_indices, dagger=(name == "uhdg"))
+
+    def _apply_mcx_gate(self, qubits: Tuple[int, ...], *, ancillas: Tuple[int, ...]) -> "BranchState":
+        if len(qubits) < 2:
+            raise UnsupportedGateError("mcx requires at least one control and one target")
+        control_indices = tuple(_qubit_index(qubit, ancillas) for qubit in qubits[:-1])
+        target_index = _qubit_index(qubits[-1], ancillas)
+        if target_index is None or any(index is None for index in control_indices):
+            raise UnsupportedGateError("mcx currently supports ancilla controls and an ancilla target")
+        controls = tuple(index for index in control_indices if index is not None)
+        if target_index in controls:
+            raise UnsupportedGateError("mcx target cannot also be a control")
+        if len(set(controls)) != len(controls):
+            raise UnsupportedGateError("mcx controls must be distinct")
+        if len(controls) == 1:
+            return self._apply_cx_ancilla_to_ancilla(controls[0], target_index)
+        return self._apply_mcx_ancilla_to_ancilla(controls, target_index)
 
     def _apply_ancilla_matrix(self, ancilla_index: int, matrix: Tuple[Tuple[sp.Expr, sp.Expr], Tuple[sp.Expr, sp.Expr]]) -> "BranchState":
         new: Dict[BranchKey, BranchValue] = {}
@@ -256,6 +295,13 @@ class BranchState:
             _add_branch(new, new_key, branch, self.num_system_qubits)
         return self._replace(new)
 
+    def _apply_mcx_ancilla_to_ancilla(self, control_indices: Tuple[int, ...], target_index: int) -> "BranchState":
+        new: Dict[BranchKey, BranchValue] = {}
+        for key, branch in self.branches.items():
+            new_key = _flip_bit(key, target_index) if all(key[index] == 1 for index in control_indices) else key
+            _add_branch(new, new_key, branch, self.num_system_qubits)
+        return self._replace(new)
+
     def _apply_cz_ancilla_to_ancilla(self, left_index: int, right_index: int) -> "BranchState":
         new: Dict[BranchKey, BranchValue] = {}
         for key, branch in self.branches.items():
@@ -290,6 +336,42 @@ class BranchState:
             processed.add(key1)
 
         return self._replace(new)
+
+    def _apply_multi_uh(self, block_indices: Tuple[int, ...], *, dagger: bool) -> "BranchState":
+        if self.expression_kind != "word":
+            raise UnsupportedGateError("UH/UHdg requires QSP word mode")
+
+        if dagger:
+            top_left, top_right, bottom_left, bottom_right = "Hd", "Ad", "Gd", "Cd"
+        else:
+            top_left, top_right, bottom_left, bottom_right = "H", "G", "A", "C"
+
+        new: Dict[BranchKey, BranchValue] = {}
+        processed = set()
+        group_keys = {_clear_bits(key, block_indices) for key in self.branches}
+
+        for zero_key in sorted(group_keys):
+            if zero_key in processed:
+                continue
+
+            complement_key = _canonical_complement_key(zero_key, block_indices)
+            branch0 = self.branch(zero_key)
+            branch1 = self._block_complement_branch(zero_key, block_indices)
+
+            new[zero_key] = word_atom(top_left) * branch0 + word_atom(top_right) * branch1
+            new[complement_key] = word_atom(bottom_left) * branch0 + word_atom(bottom_right) * branch1
+            processed.add(zero_key)
+
+        return self._replace(new)
+
+    def _block_complement_branch(self, zero_key: BranchKey, block_indices: Tuple[int, ...]) -> BranchValue:
+        total = self._zero()
+        for block_bits in _nonzero_bit_patterns(len(block_indices)):
+            key = list(zero_key)
+            for block_index, bit in zip(block_indices, block_bits):
+                key[block_index] = bit
+            total = total + self.branch(tuple(key))
+        return total
 
     def _replace(self, branches: Mapping[BranchKey, BranchValue]) -> "BranchState":
         return BranchState(self.num_ancillas, self.num_system_qubits, branches, expression_kind=self.expression_kind)
@@ -408,6 +490,26 @@ def _set_bit(key: BranchKey, index: int, value: int) -> BranchKey:
 
 def _flip_bit(key: BranchKey, index: int) -> BranchKey:
     return _set_bit(key, index, 1 - key[index])
+
+
+def _clear_bits(key: BranchKey, indices: Tuple[int, ...]) -> BranchKey:
+    bits = list(key)
+    for index in indices:
+        bits[index] = 0
+    return tuple(bits)
+
+
+def _canonical_complement_key(zero_key: BranchKey, block_indices: Tuple[int, ...]) -> BranchKey:
+    bits = list(zero_key)
+    bits[block_indices[0]] = 1
+    return tuple(bits)
+
+
+def _nonzero_bit_patterns(width: int) -> Tuple[Tuple[int, ...], ...]:
+    return tuple(
+        tuple((value >> shift) & 1 for shift in reversed(range(width)))
+        for value in range(1, 2**width)
+    )
 
 
 def _add_branch(branches: Dict[BranchKey, BranchValue], key: BranchKey, value: BranchValue, num_system_qubits: int) -> None:

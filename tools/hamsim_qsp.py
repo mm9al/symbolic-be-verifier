@@ -119,6 +119,8 @@ def _print_qasm_snippet(record: dict[str, Any], qasm_args: argparse.Namespace) -
                 phase_qubit=qasm_args.phase_qubit,
                 block_ancilla=qasm_args.block_ancilla,
                 system_qubit=qasm_args.system_qubit,
+                block_ancillas=qasm_args.block_ancillas,
+                system_qubits=qasm_args.system_qubits,
                 signal_gate=qasm_args.signal_gate,
                 signal_gate_dagger=qasm_args.signal_gate_dagger,
             )
@@ -133,6 +135,8 @@ def _print_qasm_snippet(record: dict[str, Any], qasm_args: argparse.Namespace) -
             phase_qubit=qasm_args.phase_qubit,
             block_ancilla=qasm_args.block_ancilla,
             system_qubit=qasm_args.system_qubit,
+            block_ancillas=qasm_args.block_ancillas,
+            system_qubits=qasm_args.system_qubits,
             signal_gate=qasm_args.signal_gate,
             signal_gate_dagger=qasm_args.signal_gate_dagger,
         )
@@ -205,7 +209,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--phase-qubit", default="q[0]")
     parser.add_argument("--block-ancilla", default="q[1]")
+    parser.add_argument("--block-ancillas", nargs="+", help="Block-encoding ancilla qubits, e.g. q[1] q[2].")
     parser.add_argument("--system-qubit", default="q[2]")
+    parser.add_argument("--system-qubits", nargs="+", help="System qubits, e.g. q[4] q[5].")
     parser.add_argument("--selector-qubit", default="q[3]")
     parser.add_argument("--signal-gate", default="UH")
     parser.add_argument("--signal-gate-dagger", default="UHdg")
@@ -239,6 +245,8 @@ def main() -> int:
             phase_qubit=args.phase_qubit,
             block_ancilla=args.block_ancilla,
             system_qubit=args.system_qubit,
+            block_ancillas=args.block_ancillas,
+            system_qubits=args.system_qubits,
             signal_gate=args.signal_gate,
             signal_gate_dagger=args.signal_gate_dagger,
         )
