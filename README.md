@@ -112,10 +112,11 @@ Verification results:
 
 ## Hamiltonian Simulation QSP Data
 
-Use `tools/hamsim_qsp.py` to generate selector-wrapped Hamiltonian-simulation
-cosine and sine QASM examples. This tool needs pyqsp's scientific Python
-dependencies (`numpy`, `scipy`, `matplotlib`), so run it with an environment
-that has pyqsp available, not the minimal verifier `.venv`.
+QSP generation lives in `symbolic.qsp`; `tools/hamsim_qsp.py` is a command-line
+wrapper around that module. Use the tool to generate selector-wrapped
+Hamiltonian-simulation cosine and sine QASM examples. Synthesis needs pyqsp's
+scientific Python dependencies (`numpy`, `scipy`, `matplotlib`), so run it with
+an environment that has pyqsp available, not the minimal verifier `.venv`.
 
 ```bash
 python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --write-examples
@@ -166,6 +167,29 @@ instead of evaluating the polynomial on `--base`.
   --expected-polynomial '0.24999991579484243*x - 0.010415992523176125*x^3 + 0.00012885803586171963*x^5' \
   --hermitian-base \
   --compare-polynomial-only
+```
+
+The checked-in `examples/qsp_hamsim_t05_eps1e-4` fixture is the regression case
+for one block ancilla:
+
+```text
+phase ancilla     q[0]
+block ancilla     q[1]
+system qubit      q[2]
+selector ancilla  q[3]
+```
+
+Run the regression with:
+
+```bash
+.venv/bin/python -m pytest tests/test_qsp.py
+```
+
+This verifies that both checked-in selector circuits still synthesize and
+verify as:
+
+```text
+m = 1 block ancilla -> qsp cos/sin synthesis PASS
 ```
 
 For debugging the raw component data without writing files:
