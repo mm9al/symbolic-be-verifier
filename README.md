@@ -244,10 +244,13 @@ python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --component full --qasm-sni
   --system-qubit 'q[4]'
 ```
 
-The emitted full block prepares the selector, uses the cosine/sine common QSP
-skeleton with selector-controlled signed phase differences, extracts pyqsp's
-imaginary response with the component selector, then applies `sdg; h` to form
-the all-zero outer-selector branch:
+The emitted full block prepares the selector, shares the cosine/sine QSP signal
+skeleton, and multiplexes only the signed phase gadgets. Each common layer first
+applies the cosine signed phase, then selector `1` adds the sine-cosine phase
+difference. The sine branch gets one final controlled `U_H` and signed phase.
+The component selector then extracts pyqsp's imaginary response, using `s` or
+`sdg` according to the sine degree parity, before the outer `sdg; h` forms the
+all-zero selector branch:
 
 ```text
 1/2 * (P_cos(H) - i P_sin(H))
@@ -272,7 +275,8 @@ Verify the degree-3 fixture with:
   --systems 'q[4]' \
   --expected-polynomial '0.24991946353954456 - 0.12497982382931781*i*x - 0.030604023458682638*x^2 + 0.005127459989174488*i*x^3' \
   --hermitian-base \
-  --compare-polynomial-only
+  --compare-polynomial-only \
+  --result-only
 ```
 
 Verify the degree-5 fixture with:
@@ -284,7 +288,22 @@ Verify the degree-5 fixture with:
   --systems 'q[4]' \
   --expected-polynomial '0.24999983177772669 - 0.12499995789742122*i*x - 0.031246969364139787*x^2 + 0.0052079962615880623*i*x^3 + 0.00064294590545715025*x^4 - 6.4429017930859816e-05*i*x^5' \
   --hermitian-base \
-  --compare-polynomial-only
+  --compare-polynomial-only \
+  --result-only
+```
+
+Use `--result-only` when you only want the verifier status instead of the full
+symbolic branches.
+
+```bash
+time .venv/bin/python -m symbolic.verify \
+  examples/qsp_hamsim_full_t05_eps01/qsp_hamsim_full_t05_eps01_deg3.qasm \
+  --ancillas 'q[0]' 'q[1]' 'q[2]' 'q[3]' \
+  --systems 'q[4]' \
+  --expected-polynomial '0.24991946353954456 - 0.12497982382931781*i*x - 0.030604023458682638*x^2 + 0.005127459989174488*i*x^3' \
+  --hermitian-base \
+  --compare-polynomial-only \
+  --result-only
 ```
 
 ## Abstract Multi-Control QSP

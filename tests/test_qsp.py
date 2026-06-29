@@ -28,7 +28,7 @@ def test_hamsim_exp_polynomial_expr_combines_cos_minus_i_sin_with_scale():
     assert hamsim_exp_polynomial_expr([1.0, 0.0, -0.25], [0.0, 0.5], scale=0.5) == "0.5 - 0.25*i*x - 0.125*x^2"
 
 
-def test_full_hamsim_qasm_snippet_controls_cos_on_zero_and_sin_on_one():
+def test_full_hamsim_qasm_snippet_uses_common_skeleton_with_sin_difference_phases():
     cos_record = {
         "component": "cos",
         "pyqsp_phases": [0.0, 0.0, 0.0],
@@ -57,12 +57,45 @@ def test_full_hamsim_qasm_snippet_controls_cos_on_zero_and_sin_on_one():
     )
 
     assert "// common phase 0" in snippet
+    assert "// extra signed difference phase on sin branch only" in snippet
+    assert "// common U" in snippet
     assert "UH q[3], q[4];" in snippet
-    assert "UHdg q[3], q[4];" in snippet
     assert "// sin-only final U" in snippet
     assert "cUH q[0], q[3], q[4];" in snippet
+    assert "// final sin-only phase 3" in snippet
     assert "s q[1];\nx q[1];" in snippet
     assert snippet.endswith("sdg q[0];\nh q[0];")
+
+
+def test_full_hamsim_qasm_snippet_flips_component_extraction_phase_by_sine_degree():
+    cos_record = {
+        "component": "cos",
+        "pyqsp_phases": [0.0] * 5,
+        "qsvt_projector_phases": [0.1] * 5,
+        "qasm_rz_angles": [1.0] * 5,
+    }
+    sin_record = {
+        "component": "sin",
+        "pyqsp_phases": [0.0] * 6,
+        "qsvt_projector_phases": [0.2] * 6,
+        "qasm_rz_angles": [2.0] * 6,
+    }
+
+    snippet = full_hamsim_qasm_snippet(
+        cos_record,
+        sin_record,
+        selector_qubit="q[0]",
+        component_selector_qubit="q[1]",
+        phase_qubit="q[2]",
+        block_ancillas=["q[3]"],
+        system_qubits=["q[4]"],
+        signal_gate="UH",
+        signal_gate_dagger="UHdg",
+        controlled_signal_gate="cUH",
+        controlled_signal_gate_dagger="cUHdg",
+    )
+
+    assert "sdg q[1];\nx q[1];" in snippet
 
 
 @pytest.mark.parametrize(

@@ -240,6 +240,14 @@ def format_result(result: VerificationResult, *, show_trace: bool = False) -> st
     return "\n".join(lines)
 
 
+def format_status(result: VerificationResult) -> str:
+    if result.qsp_status is not None:
+        return result.qsp_status
+    if result.status is not None:
+        return result.status
+    return "NO_EXPECTED"
+
+
 def _normalize_expected(expected: str | OpExpr | None, *, num_system_qubits: int) -> Optional[OpExpr]:
     if expected is None:
         return None
@@ -439,6 +447,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--system", default="1", help="Single system qubit index. Ignored when --systems is set.")
     parser.add_argument("--systems", nargs="+", help='System qubits in operator-index order, e.g. q[2] q[3].')
     parser.add_argument("--trace", action="store_true", help="Print every intermediate B0/B1 update.")
+    parser.add_argument("--result-only", action="store_true", help="Print only PASS/FAIL status.")
     args = parser.parse_args(argv)
 
     ancillas = tuple(_parse_qubit_arg(value) for value in args.ancillas) if args.ancillas is not None else None
@@ -458,7 +467,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         compare_polynomial_only=args.compare_polynomial_only,
         tolerance=args.tolerance,
     )
-    print(format_result(result, show_trace=args.trace))
+    if args.result_only:
+        print(format_status(result))
+    else:
+        print(format_result(result, show_trace=args.trace))
     return 0 if result.success is not False else 1
 
 
