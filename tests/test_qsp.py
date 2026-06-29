@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from symbolic.qsp import polynomial_expr, qasm_phase_data
+from symbolic.qsp import full_hamsim_qasm_snippet, hamsim_exp_polynomial_expr, polynomial_expr, qasm_phase_data
 from symbolic.verify import PASS, polynomial_close, verify_qasm_file
 
 
@@ -22,6 +22,47 @@ def test_phase_conversion_uses_qsvt_projector_convention():
 
 def test_polynomial_expr_formats_sparse_qsp_coefficients():
     assert polynomial_expr([0.5, 0.0, -0.125, 0.0, 0.01]) == "0.5 - 0.125*x^2 + 0.01*x^4"
+
+
+def test_hamsim_exp_polynomial_expr_combines_cos_minus_i_sin_with_scale():
+    assert hamsim_exp_polynomial_expr([1.0, 0.0, -0.25], [0.0, 0.5], scale=0.5) == "0.5 - 0.25*i*x - 0.125*x^2"
+
+
+def test_full_hamsim_qasm_snippet_controls_cos_on_zero_and_sin_on_one():
+    cos_record = {
+        "component": "cos",
+        "pyqsp_phases": [0.0, 0.0, 0.0],
+        "qsvt_projector_phases": [0.1, 0.2, 0.3],
+        "qasm_rz_angles": [1.0, 2.0, 3.0],
+    }
+    sin_record = {
+        "component": "sin",
+        "pyqsp_phases": [0.0, 0.0, 0.0, 0.0],
+        "qsvt_projector_phases": [0.4, 0.5, 0.6, 0.7],
+        "qasm_rz_angles": [4.0, 5.0, 6.0, 7.0],
+    }
+
+    snippet = full_hamsim_qasm_snippet(
+        cos_record,
+        sin_record,
+        selector_qubit="q[0]",
+        component_selector_qubit="q[1]",
+        phase_qubit="q[2]",
+        block_ancillas=["q[3]"],
+        system_qubits=["q[4]"],
+        signal_gate="UH",
+        signal_gate_dagger="UHdg",
+        controlled_signal_gate="cUH",
+        controlled_signal_gate_dagger="cUHdg",
+    )
+
+    assert "// common phase 0" in snippet
+    assert "UH q[3], q[4];" in snippet
+    assert "UHdg q[3], q[4];" in snippet
+    assert "// sin-only final U" in snippet
+    assert "cUH q[0], q[3], q[4];" in snippet
+    assert "s q[1];\nx q[1];" in snippet
+    assert snippet.endswith("sdg q[0];\nh q[0];")
 
 
 @pytest.mark.parametrize(

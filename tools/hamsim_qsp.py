@@ -23,12 +23,16 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from symbolic.qsp import (  # noqa: E402
+    full_hamsim_qasm_snippet,
     generate_component,
     generate_exp_component,
+    generate_full_hamsim_record,
     generate_selector_component,
+    hamsim_exp_polynomial_expr,
     polynomial_expr,
     qasm_snippet,
     selector_qasm_snippet,
+    write_full_hamsim_example,
     write_selector_examples,
 )
 
@@ -52,6 +56,11 @@ def _print_text(
         print(f"ensure_bounded = {record['ensure_bounded']}")
         print(f"scale = {record['scale']}")
         print(f"degree = {record['degree']}")
+        if record["component"] == "full":
+            _print_full_record(record, variable=variable, precision=precision, include_logs=include_logs)
+            if include_qasm_snippet:
+                _print_qasm_snippet(record, qasm_args)
+            continue
         if record["component"] == "exp":
             _print_exp_record(record, variable=variable, precision=precision, include_logs=include_logs)
             if include_qasm_snippet:
@@ -96,6 +105,22 @@ def _print_exp_record(record: dict[str, Any], *, variable: str, precision: int, 
     _print_pyqsp_log(record, include_logs=include_logs)
 
 
+def _print_full_record(record: dict[str, Any], *, variable: str, precision: int, include_logs: bool) -> None:
+    cos_mono = record["cos"]["monomial_coefficients"]
+    sin_mono = record["sin"]["monomial_coefficients"]
+    cos_expr = polynomial_expr(cos_mono, variable, precision)
+    sin_expr = polynomial_expr(sin_mono, variable, precision)
+    exp_expr = hamsim_exp_polynomial_expr(cos_mono, sin_mono, precision=precision, scale=0.5, variable=variable)
+    print(f"cos degree = {record['cos']['degree']}")
+    print(f"sin degree = {record['sin']['degree']}")
+    print(f"P_cos({variable}) = {cos_expr}")
+    print(f"P_sin({variable}) = {sin_expr}")
+    print(f"all-zero selector polynomial = {exp_expr}")
+    print(f"cos qasm rz angles = {record['cos']['qasm_rz_angles']}")
+    print(f"sin qasm rz angles = {record['sin']['qasm_rz_angles']}")
+    _print_pyqsp_log(record, include_logs=include_logs)
+
+
 def _print_pyqsp_log(record: dict[str, Any], *, include_logs: bool) -> None:
     if include_logs and record["pyqsp_log"]:
         print("pyqsp log:")
@@ -105,12 +130,31 @@ def _print_pyqsp_log(record: dict[str, Any], *, include_logs: bool) -> None:
 
 def _print_qasm_snippet(record: dict[str, Any], qasm_args: argparse.Namespace) -> None:
     if "pyqsp_phases" not in record:
-        print("QASM snippet skipped because --no-angles was used.")
-        return
+        if record["component"] != "full":
+            print("QASM snippet skipped because --no-angles was used.")
+            return
 
     block_ancillas = _block_ancillas_from_args(qasm_args)
     system_qubits = _system_qubits_from_args(qasm_args)
     print("QASM snippet:")
+    if record["component"] == "full":
+        print(
+            full_hamsim_qasm_snippet(
+                record["cos"],
+                record["sin"],
+                selector_qubit=qasm_args.selector_qubit,
+                component_selector_qubit=qasm_args.component_selector_qubit,
+                phase_qubit=qasm_args.phase_qubit,
+                block_ancillas=block_ancillas,
+                system_qubits=system_qubits,
+                signal_gate=qasm_args.signal_gate,
+                signal_gate_dagger=qasm_args.signal_gate_dagger,
+                controlled_signal_gate=qasm_args.controlled_signal_gate,
+                controlled_signal_gate_dagger=qasm_args.controlled_signal_gate_dagger,
+            )
+        )
+        return
+
     if "selector_component" in record:
         print(
             selector_qasm_snippet(
@@ -154,7 +198,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--component",
-        choices=["cos", "sin", "both", "exp", "cos-selector", "sin-selector"],
+        choices=["cos", "sin", "both", "exp", "full", "cos-selector", "sin-selector"],
         default="cos",
         help="Which Hamiltonian-simulation component to generate.",
     )
@@ -197,7 +241,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--write-examples",
         action="store_true",
-        help="Write selector-wrapped cos/sin QASM examples and expected polynomial metadata under --examples-dir.",
+        help="Write selector-wrapped cos/sin or full QASM examples and expected polynomial metadata under --examples-dir.",
     )
     parser.add_argument(
         "--examples-dir",
@@ -211,8 +255,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--system-qubit", default="q[2]")
     parser.add_argument("--system-qubits", nargs="+", help="System qubits, e.g. q[4] q[5].")
     parser.add_argument("--selector-qubit", default="q[3]")
+    parser.add_argument("--component-selector-qubit", default="q[4]")
     parser.add_argument("--signal-gate", default="UH")
     parser.add_argument("--signal-gate-dagger", default="UHdg")
+    parser.add_argument("--controlled-signal-gate", default="cUH")
+    parser.add_argument("--controlled-signal-gate-dagger", default="cUHdg")
 
     args = parser.parse_args()
     if args.epsilon <= 0:
@@ -222,9 +269,11 @@ def parse_args() -> argparse.Namespace:
     if args.precision <= 0:
         parser.error("--precision must be positive")
     if args.qasm_snippet and args.component in {"both", "exp"}:
-        parser.error("--qasm-snippet requires --component cos, sin, cos-selector, or sin-selector")
+        parser.error("--qasm-snippet requires --component cos, sin, full, cos-selector, or sin-selector")
     if args.write_examples and args.no_angles:
         parser.error("--write-examples requires angle generation")
+    if args.component == "full" and args.no_angles:
+        parser.error("--component full requires angle generation")
     return args
 
 
@@ -233,6 +282,33 @@ def main() -> int:
     if args.write_examples:
         block_ancillas = _block_ancillas_from_args(args)
         system_qubits = _system_qubits_from_args(args)
+        if args.component == "full":
+            metadata = write_full_hamsim_example(
+                tau=args.tau,
+                epsilon=args.epsilon,
+                ensure_bounded=not args.unbounded,
+                method=args.method,
+                signal_operator=args.signal_operator,
+                precision=args.precision,
+                examples_dir=args.examples_dir,
+                selector_qubit=args.selector_qubit,
+                component_selector_qubit=args.component_selector_qubit,
+                phase_qubit=args.phase_qubit,
+                block_ancillas=block_ancillas,
+                system_qubits=system_qubits,
+                signal_gate=args.signal_gate,
+                signal_gate_dagger=args.signal_gate_dagger,
+                controlled_signal_gate=args.controlled_signal_gate,
+                controlled_signal_gate_dagger=args.controlled_signal_gate_dagger,
+            )
+            if args.format == "json":
+                print(json.dumps(metadata, indent=2, sort_keys=True))
+            else:
+                print(f"Wrote metadata: {metadata['metadata']}")
+                print(f"Wrote full: {metadata['qasm']}")
+                print(f"  polynomial = {metadata['polynomial']}")
+            return 0
+
         metadata = write_selector_examples(
             tau=args.tau,
             epsilon=args.epsilon,
@@ -274,6 +350,17 @@ def main() -> int:
 
 
 def _generate_records(args: argparse.Namespace) -> list[dict[str, Any]]:
+    if args.component == "full":
+        return [
+            generate_full_hamsim_record(
+                tau=args.tau,
+                epsilon=args.epsilon,
+                ensure_bounded=not args.unbounded,
+                method=args.method,
+                signal_operator=args.signal_operator,
+            )
+        ]
+
     if args.component in {"cos-selector", "sin-selector"}:
         return [
             generate_selector_component(

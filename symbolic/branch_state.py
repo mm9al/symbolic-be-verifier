@@ -126,6 +126,14 @@ class BranchState:
         if name in {"uh", "uhdg"}:
             return self._apply_block_encoding_gate(name, gate.qubits, ancillas=ancilla_qubits, systems=system_qubits)
 
+        if name in {"cuh", "cuhdg"}:
+            return self._apply_controlled_block_encoding_gate(
+                name,
+                gate.qubits,
+                ancillas=ancilla_qubits,
+                systems=system_qubits,
+            )
+
         if name == "mcx":
             return self._apply_mcx_gate(gate.qubits, ancillas=ancilla_qubits)
 
@@ -220,6 +228,38 @@ class BranchState:
         if len(set(block_indices)) != len(block_indices):
             raise UnsupportedGateError(f"{name} has duplicate block ancilla operands")
         return self._apply_multi_uh(block_indices, dagger=(name == "uhdg"))
+
+    def _apply_controlled_block_encoding_gate(
+        self,
+        name: str,
+        qubits: Tuple[int, ...],
+        *,
+        ancillas: Tuple[int, ...],
+        systems: Tuple[int, ...],
+    ) -> "BranchState":
+        if len(qubits) < 3:
+            raise UnsupportedGateError(f"{name} requires a selector control, block ancilla, and system qubit")
+
+        control_index = _qubit_index(qubits[0], ancillas)
+        if control_index is None:
+            raise UnsupportedGateError(f"{name} first operand must be a selector ancilla control")
+
+        operands = qubits[1:]
+        block_indices = tuple(index for qubit in operands if (index := _qubit_index(qubit, ancillas)) is not None)
+        system_indices = tuple(index for qubit in operands if (index := _qubit_index(qubit, systems)) is not None)
+        unknown = tuple(
+            qubit for qubit in operands if _qubit_index(qubit, ancillas) is None and _qubit_index(qubit, systems) is None
+        )
+
+        if unknown:
+            raise UnsupportedGateError(f"{name} operands must be known ancilla/system qubits: {qubits}")
+        if control_index in block_indices:
+            raise UnsupportedGateError(f"{name} selector control cannot also be a block ancilla")
+        if not block_indices or not system_indices:
+            raise UnsupportedGateError(f"{name} must include at least one block ancilla and one system qubit")
+        if len(set(block_indices)) != len(block_indices):
+            raise UnsupportedGateError(f"{name} has duplicate block ancilla operands")
+        return self._apply_controlled_multi_uh(control_index, block_indices, dagger=(name == "cuhdg"))
 
     def _apply_mcx_gate(self, qubits: Tuple[int, ...], *, ancillas: Tuple[int, ...]) -> "BranchState":
         if len(qubits) < 2:
@@ -328,6 +368,36 @@ class BranchState:
             new[zero_key] = word_atom(top_left) * branch0 + word_atom(top_right) * branch1
             new[complement_key] = word_atom(bottom_left) * branch0 + word_atom(bottom_right) * branch1
             processed.add(zero_key)
+
+        return self._replace(new)
+
+    def _apply_controlled_multi_uh(
+        self,
+        control_index: int,
+        block_indices: Tuple[int, ...],
+        *,
+        dagger: bool,
+    ) -> "BranchState":
+        if self.expression_kind != "word":
+            raise UnsupportedGateError("cUH/cUHdg requires QSP word mode")
+
+        if dagger:
+            top_left, top_right, bottom_left, bottom_right = "Hd", "Ad", "Gd", "Cd"
+        else:
+            top_left, top_right, bottom_left, bottom_right = "H", "G", "A", "C"
+
+        new: Dict[BranchKey, BranchValue] = {
+            key: branch for key, branch in self.branches.items() if key[control_index] == 0
+        }
+        group_keys = {_clear_bits(key, block_indices) for key in self.branches if key[control_index] == 1}
+
+        for zero_key in sorted(group_keys):
+            complement_key = _canonical_complement_key(zero_key, block_indices)
+            branch0 = self.branch(zero_key)
+            branch1 = self._block_complement_branch(zero_key, block_indices)
+
+            new[zero_key] = word_atom(top_left) * branch0 + word_atom(top_right) * branch1
+            new[complement_key] = word_atom(bottom_left) * branch0 + word_atom(bottom_right) * branch1
 
         return self._replace(new)
 

@@ -41,6 +41,39 @@ def polynomial_expr(coeffs: list[float], variable: str = "x", precision: int = 1
     return " ".join(terms) if terms else "0"
 
 
+def hamsim_exp_polynomial_expr(
+    cos_coeffs: list[float],
+    sin_coeffs: list[float],
+    *,
+    precision: int = 17,
+    scale: float = 1.0,
+    variable: str = "x",
+) -> str:
+    terms: list[str] = []
+    length = max(len(cos_coeffs), len(sin_coeffs))
+    for degree in range(length):
+        real = clean_float(scale * (cos_coeffs[degree] if degree < len(cos_coeffs) else 0.0))
+        imag = clean_float(-scale * (sin_coeffs[degree] if degree < len(sin_coeffs) else 0.0))
+        coeff = _format_complex_coeff(real, imag, precision)
+        if coeff is None:
+            continue
+
+        if degree == 0:
+            body = coeff
+        elif degree == 1:
+            body = f"{_coefficient_factor(coeff)}*{variable}"
+        else:
+            body = f"{_coefficient_factor(coeff)}*{variable}^{degree}"
+
+        if not terms:
+            terms.append(body)
+        elif body.startswith("-"):
+            terms.append("- " + body[1:])
+        else:
+            terms.append("+ " + body)
+    return " ".join(terms) if terms else "0"
+
+
 def format_number(value: float, precision: int) -> str:
     if value == 0.0:
         return "0"
@@ -148,6 +181,185 @@ def selector_qasm_snippet(
     lines.append(f"sdg {selector_qubit};")
     lines.append(f"x {selector_qubit};")
     return "\n".join(lines)
+
+
+def full_hamsim_qasm_snippet(
+    cos_record: dict[str, Any],
+    sin_record: dict[str, Any],
+    *,
+    selector_qubit: str,
+    component_selector_qubit: str,
+    phase_qubit: str,
+    block_ancillas: list[str],
+    system_qubits: list[str],
+    signal_gate: str,
+    signal_gate_dagger: str,
+    controlled_signal_gate: str,
+    controlled_signal_gate_dagger: str,
+) -> str:
+    block_ancillas = _normalize_qubit_list(block_ancillas, label="block ancilla")
+    system_qubits = _normalize_qubit_list(system_qubits, label="system qubit")
+    lines: list[str] = []
+    lines.append(f"h {selector_qubit};")
+    lines.append(f"h {component_selector_qubit};")
+    lines.append("")
+
+    if len(block_ancillas) != 1:
+        raise ValueError("Optimized full Hamiltonian simulation QASM currently expects exactly one block ancilla")
+    if len(sin_record["qsvt_projector_phases"]) != len(cos_record["qsvt_projector_phases"]) + 1:
+        raise ValueError("Optimized full Hamiltonian simulation expects sine degree to exceed cosine degree by one")
+
+    cos_psis = cos_record["qsvt_projector_phases"]
+    sin_psis = sin_record["qsvt_projector_phases"]
+    block_ancilla = block_ancillas[0]
+    for idx, cos_psi in enumerate(cos_psis):
+        sin_psi = sin_psis[idx]
+        delta = sin_psi - cos_psi
+        lines.append(f"// common phase {idx}")
+        lines.append(f"// cos psi_{idx} = {cos_psi:.12g}")
+        lines.append(f"// sin psi_{idx} = {sin_psi:.12g}")
+        lines.append(f"// Delta_{idx} = sin psi_{idx} - cos psi_{idx} = {delta:.12g}")
+        lines.extend(
+            _base_signed_phase(
+                cos_psi,
+                component_selector_qubit=component_selector_qubit,
+                phase_qubit=phase_qubit,
+                block_ancilla=block_ancilla,
+            )
+        )
+        lines.append("")
+        lines.append("// extra signed difference phase on sin branch only")
+        lines.extend(
+            _controlled_signed_phase(
+                delta,
+                selector_qubit=selector_qubit,
+                component_selector_qubit=component_selector_qubit,
+                phase_qubit=phase_qubit,
+                block_ancilla=block_ancilla,
+            )
+        )
+        if idx == len(cos_psis) - 1:
+            continue
+
+        use_dagger = idx % 2 == 1
+        gate = signal_gate_dagger if use_dagger else signal_gate
+        label = "common U^\\dagger" if use_dagger else "common U"
+        lines.append("")
+        lines.append(f"// {label}")
+        lines.append(f"{gate} {_format_gate_operands([*block_ancillas, *system_qubits])};")
+        lines.append("")
+
+    lines.append("")
+    lines.append("// sin-only final U")
+    lines.extend(
+        _controlled_signal_gate_lines(
+            controlled_signal_gate,
+            selector_qubit=selector_qubit,
+            selector_value=1,
+            block_ancillas=block_ancillas,
+            system_qubits=system_qubits,
+        )
+    )
+    lines.append("")
+    lines.append(f"// final sin-only phase {len(sin_psis) - 1}")
+    lines.append(f"// sin psi_{len(sin_psis) - 1} = {sin_psis[-1]:.12g}")
+    lines.extend(
+        _controlled_signed_phase(
+            sin_psis[-1],
+            selector_qubit=selector_qubit,
+            component_selector_qubit=component_selector_qubit,
+            phase_qubit=phase_qubit,
+            block_ancilla=block_ancilla,
+        )
+    )
+    lines.append("")
+    lines.append(f"h {component_selector_qubit};")
+    lines.append(f"s {component_selector_qubit};")
+    lines.append(f"x {component_selector_qubit};")
+    lines.append("")
+    lines.append(f"sdg {selector_qubit};")
+    lines.append(f"h {selector_qubit};")
+    return "\n".join(lines)
+
+
+def full_hamsim_qasm_file(
+    record: dict[str, Any],
+    *,
+    precision: int,
+    selector_qubit: str,
+    component_selector_qubit: str,
+    phase_qubit: str,
+    block_ancillas: list[str],
+    system_qubits: list[str],
+    signal_gate: str,
+    signal_gate_dagger: str,
+    controlled_signal_gate: str,
+    controlled_signal_gate_dagger: str,
+) -> str:
+    block_ancillas = _normalize_qubit_list(block_ancillas, label="block ancilla")
+    system_qubits = _normalize_qubit_list(system_qubits, label="system qubit")
+    qreg_size = _qreg_size(selector_qubit, component_selector_qubit, phase_qubit, *block_ancillas, *system_qubits)
+    snippet = full_hamsim_qasm_snippet(
+        record["cos"],
+        record["sin"],
+        selector_qubit=selector_qubit,
+        component_selector_qubit=component_selector_qubit,
+        phase_qubit=phase_qubit,
+        block_ancillas=block_ancillas,
+        system_qubits=system_qubits,
+        signal_gate=signal_gate,
+        signal_gate_dagger=signal_gate_dagger,
+        controlled_signal_gate=controlled_signal_gate,
+        controlled_signal_gate_dagger=controlled_signal_gate_dagger,
+    )
+    cos_polynomial = polynomial_expr(record["cos"]["monomial_coefficients"], "x", precision)
+    sin_polynomial = polynomial_expr(record["sin"]["monomial_coefficients"], "x", precision)
+    exp_polynomial = hamsim_exp_polynomial_expr(
+        record["cos"]["monomial_coefficients"],
+        record["sin"]["monomial_coefficients"],
+        precision=precision,
+        scale=0.5,
+    )
+    cos_phase_lines = "\n".join(f"//   cos phi_{idx} = {phase:.17g}" for idx, phase in enumerate(record["cos"]["pyqsp_phases"]))
+    sin_phase_lines = "\n".join(f"//   sin phi_{idx} = {phase:.17g}" for idx, phase in enumerate(record["sin"]["pyqsp_phases"]))
+    block_comment = "\n".join(f"// {qubit} = block-encoding ancilla[{index}]" for index, qubit in enumerate(block_ancillas))
+    system_comment = "\n".join(f"// {qubit} = system qubit[{index}]" for index, qubit in enumerate(system_qubits))
+    controlled_signature = _opaque_signature(["c", *[f"a{index}" for index in range(len(block_ancillas))]], [f"s{index}" for index in range(len(system_qubits))])
+    mcx_signature = _opaque_signature(["selector", *[f"c{index}" for index in range(len(block_ancillas))]], ["t"])
+
+    return f"""OPENQASM 2.0;
+include "qelib1.inc";
+
+opaque {signal_gate} {controlled_signature.removeprefix("c, ")};
+opaque {signal_gate_dagger} {controlled_signature.removeprefix("c, ")};
+opaque {controlled_signal_gate} {controlled_signature};
+opaque {controlled_signal_gate_dagger} {controlled_signature};
+opaque mcx {mcx_signature};
+
+qreg q[{qreg_size}];
+
+// {selector_qubit} = Hamiltonian-simulation selector ancilla
+// {component_selector_qubit} = QSP imaginary-part extraction selector ancilla
+// {phase_qubit} = QSP phase ancilla
+{block_comment}
+{system_comment}
+
+// Full Hamiltonian simulation QSP block generated by tools/hamsim_qsp.py.
+// The outer selector runs the cosine QSP execution on |0> and the sine QSP
+// execution on |1>. The component selector extracts the imaginary response
+// of pyqsp's sym_qsp/Wx component circuits before the outer sdg+h combines
+// P_cos(H) - i P_sin(H).
+//
+// P_cos(x) = {cos_polynomial}
+// P_sin(x) = {sin_polynomial}
+// Expected all-zero selector branch = {exp_polynomial}
+//
+// QSP phases:
+{cos_phase_lines}
+{sin_phase_lines}
+
+{snippet}
+"""
 
 
 def selector_qasm_file(
@@ -260,6 +472,44 @@ def verification_command(
     ]
 
 
+def full_hamsim_verification_command(
+    record: dict[str, Any],
+    qasm_path: Path,
+    *,
+    precision: int,
+    selector_qubit: str,
+    component_selector_qubit: str,
+    phase_qubit: str,
+    block_ancillas: list[str],
+    system_qubits: list[str],
+) -> list[str]:
+    block_ancillas = _normalize_qubit_list(block_ancillas, label="block ancilla")
+    system_qubits = _normalize_qubit_list(system_qubits, label="system qubit")
+    polynomial = hamsim_exp_polynomial_expr(
+        record["cos"]["monomial_coefficients"],
+        record["sin"]["monomial_coefficients"],
+        precision=precision,
+        scale=0.5,
+    )
+    return [
+        ".venv/bin/python",
+        "-m",
+        "symbolic.verify",
+        str(qasm_path),
+        "--ancillas",
+        selector_qubit,
+        component_selector_qubit,
+        phase_qubit,
+        *block_ancillas,
+        "--systems",
+        *system_qubits,
+        "--expected-polynomial",
+        polynomial,
+        "--hermitian-base",
+        "--compare-polynomial-only",
+    ]
+
+
 def write_selector_examples(
     *,
     tau: float,
@@ -353,6 +603,96 @@ def write_selector_examples(
     return metadata
 
 
+def write_full_hamsim_example(
+    *,
+    tau: float,
+    epsilon: float,
+    ensure_bounded: bool,
+    method: str,
+    signal_operator: str,
+    precision: int,
+    examples_dir: Path,
+    selector_qubit: str,
+    component_selector_qubit: str,
+    phase_qubit: str,
+    block_ancillas: list[str],
+    system_qubits: list[str],
+    signal_gate: str,
+    signal_gate_dagger: str,
+    controlled_signal_gate: str,
+    controlled_signal_gate_dagger: str,
+) -> dict[str, Any]:
+    if method != "sym_qsp" or signal_operator != "Wx":
+        raise ValueError("--write-examples --component full currently expects --method sym_qsp --signal-operator Wx")
+
+    block_ancillas = _normalize_qubit_list(block_ancillas, label="block ancilla")
+    system_qubits = _normalize_qubit_list(system_qubits, label="system qubit")
+    record = generate_full_hamsim_record(
+        tau=tau,
+        epsilon=epsilon,
+        ensure_bounded=ensure_bounded,
+        method=method,
+        signal_operator=signal_operator,
+    )
+    tag = example_tag(tau, epsilon)
+    suffix = "" if len(block_ancillas) == 1 else f"_m{len(block_ancillas)}"
+    output_dir = examples_dir / f"qsp_hamsim_full_{tag}{suffix}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    filename = f"qsp_hamsim_full_{tag}{suffix}_deg{record['degree']}.qasm"
+    qasm_path = output_dir / filename
+    qasm_text = full_hamsim_qasm_file(
+        record,
+        precision=precision,
+        selector_qubit=selector_qubit,
+        component_selector_qubit=component_selector_qubit,
+        phase_qubit=phase_qubit,
+        block_ancillas=block_ancillas,
+        system_qubits=system_qubits,
+        signal_gate=signal_gate,
+        signal_gate_dagger=signal_gate_dagger,
+        controlled_signal_gate=controlled_signal_gate,
+        controlled_signal_gate_dagger=controlled_signal_gate_dagger,
+    )
+    qasm_path.write_text(qasm_text, encoding="utf-8")
+    polynomial = hamsim_exp_polynomial_expr(
+        record["cos"]["monomial_coefficients"],
+        record["sin"]["monomial_coefficients"],
+        precision=precision,
+        scale=0.5,
+    )
+
+    metadata = {
+        "tau": tau,
+        "epsilon": epsilon,
+        "ensure_bounded": ensure_bounded,
+        "scale": record["scale"],
+        "selector_qubit": selector_qubit,
+        "component_selector_qubit": component_selector_qubit,
+        "phase_qubit": phase_qubit,
+        "block_ancillas": block_ancillas,
+        "system_qubits": system_qubits,
+        "component": "full",
+        "qasm": str(qasm_path),
+        "degree": record["degree"],
+        "polynomial": polynomial,
+        "verification_command": full_hamsim_verification_command(
+            record,
+            qasm_path,
+            precision=precision,
+            selector_qubit=selector_qubit,
+            component_selector_qubit=component_selector_qubit,
+            phase_qubit=phase_qubit,
+            block_ancillas=block_ancillas,
+            system_qubits=system_qubits,
+        ),
+    }
+    metadata_path = output_dir / "expected_polynomial.json"
+    metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    metadata["metadata"] = str(metadata_path)
+    return metadata
+
+
 def generate_component(
     *,
     component: str,
@@ -436,6 +776,46 @@ def generate_component(
         data["parity"] = int(parity)
 
     return data
+
+
+def generate_full_hamsim_record(
+    *,
+    tau: float,
+    epsilon: float,
+    ensure_bounded: bool,
+    method: str,
+    signal_operator: str,
+) -> dict[str, Any]:
+    cos_record = generate_component(
+        component="cos",
+        tau=tau,
+        epsilon=epsilon,
+        ensure_bounded=ensure_bounded,
+        compute_angles=True,
+        method=method,
+        signal_operator=signal_operator,
+    )
+    sin_record = generate_component(
+        component="sin",
+        tau=tau,
+        epsilon=epsilon,
+        ensure_bounded=ensure_bounded,
+        compute_angles=True,
+        method=method,
+        signal_operator=signal_operator,
+    )
+    return {
+        "component": "full",
+        "tau": tau,
+        "epsilon": epsilon,
+        "ensure_bounded": ensure_bounded,
+        "scale": cos_record["scale"],
+        "degree": max(cos_record["degree"], sin_record["degree"]),
+        "selector_output": "all-zero selector branch is 1/2 * (P_cos(H) - i P_sin(H))",
+        "cos": cos_record,
+        "sin": sin_record,
+        "pyqsp_log": cos_record["pyqsp_log"] + sin_record["pyqsp_log"],
+    }
 
 
 def generate_exp_component(
@@ -558,6 +938,221 @@ def _phase_block(angle: float, phase_qubit: str, block_ancillas: list[str]) -> l
     ]
 
 
+def _base_signed_phase(
+    psi: float,
+    *,
+    component_selector_qubit: str,
+    phase_qubit: str,
+    block_ancilla: str,
+) -> list[str]:
+    psi_text = f"{psi:.12g}"
+    neg_psi_text = f"{-psi:.12g}"
+    return [
+        "// base cos signed phase",
+        f"x {component_selector_qubit};",
+        f"cx {component_selector_qubit}, {phase_qubit};",
+        f"x {component_selector_qubit};",
+        "",
+        f"x {block_ancilla};",
+        f"rz({psi_text}) {phase_qubit};",
+        f"cx {block_ancilla}, {phase_qubit};",
+        f"rz({neg_psi_text}) {phase_qubit};",
+        f"cx {block_ancilla}, {phase_qubit};",
+        f"x {block_ancilla};",
+        "",
+        f"rz({neg_psi_text}) {phase_qubit};",
+        f"cx {block_ancilla}, {phase_qubit};",
+        f"rz({psi_text}) {phase_qubit};",
+        f"cx {block_ancilla}, {phase_qubit};",
+        "",
+        f"x {component_selector_qubit};",
+        f"cx {component_selector_qubit}, {phase_qubit};",
+        f"x {component_selector_qubit};",
+    ]
+
+
+def _controlled_signed_phase(
+    psi: float,
+    *,
+    selector_qubit: str,
+    component_selector_qubit: str,
+    phase_qubit: str,
+    block_ancilla: str,
+) -> list[str]:
+    psi_text = f"{psi:.12g}"
+    neg_psi_text = f"{-psi:.12g}"
+    return [
+        f"x {block_ancilla};",
+        f"mcx {block_ancilla}, {selector_qubit}, {phase_qubit};",
+        f"x {block_ancilla};",
+        "",
+        f"x {component_selector_qubit};",
+        f"mcx {component_selector_qubit}, {selector_qubit}, {phase_qubit};",
+        f"x {component_selector_qubit};",
+        "",
+        f"rz({neg_psi_text}) {phase_qubit};",
+        "",
+        f"x {component_selector_qubit};",
+        f"mcx {component_selector_qubit}, {selector_qubit}, {phase_qubit};",
+        f"x {component_selector_qubit};",
+        "",
+        f"rz({psi_text}) {phase_qubit};",
+        "",
+        f"mcx {selector_qubit}, {component_selector_qubit}, {phase_qubit};",
+        "",
+        f"rz({psi_text}) {phase_qubit};",
+        "",
+        f"mcx {selector_qubit}, {component_selector_qubit}, {phase_qubit};",
+        "",
+        f"rz({neg_psi_text}) {phase_qubit};",
+        "",
+        f"x {block_ancilla};",
+        f"mcx {block_ancilla}, {selector_qubit}, {phase_qubit};",
+        f"x {block_ancilla};",
+    ]
+
+
+def _controlled_selector_qsp_execution(
+    record: dict[str, Any],
+    *,
+    selector_qubit: str,
+    component_selector_qubit: str,
+    selector_value: int,
+    phase_qubit: str,
+    block_ancillas: list[str],
+    system_qubits: list[str],
+    controlled_signal_gate: str,
+    controlled_signal_gate_dagger: str,
+) -> list[str]:
+    component = record["component"]
+    control_label = f"selector = {selector_value}"
+    lines = [f"// {component} branch ({control_label})"]
+    for idx, (phase, psi, theta) in enumerate(
+        zip(record["pyqsp_phases"], record["qsvt_projector_phases"], record["qasm_rz_angles"])
+    ):
+        lines.append(f"// {component} phi_{idx} = {phase:.12g}")
+        lines.append(f"// {component} psi_{idx} = {psi:.12g}")
+        lines.append(f"// {component} theta_rz_{idx} = {theta:.12g}")
+        lines.extend(
+            _controlled_selector_phase_block(
+                theta,
+                selector_qubit=selector_qubit,
+                component_selector_qubit=component_selector_qubit,
+                selector_value=selector_value,
+                phase_qubit=phase_qubit,
+                block_ancillas=block_ancillas,
+            )
+        )
+        if idx == len(record["pyqsp_phases"]) - 1:
+            continue
+
+        use_dagger = idx % 2 == 1
+        gate = controlled_signal_gate_dagger if use_dagger else controlled_signal_gate
+        label = "controlled U^\\dagger" if use_dagger else "controlled U"
+        lines.append("")
+        lines.append(f"// {component} {label}")
+        lines.extend(
+            _controlled_signal_gate_lines(
+                gate,
+                selector_qubit=selector_qubit,
+                selector_value=selector_value,
+                block_ancillas=block_ancillas,
+                system_qubits=system_qubits,
+            )
+        )
+        lines.append("")
+    return lines
+
+
+def _controlled_signal_gate_lines(
+    gate: str,
+    *,
+    selector_qubit: str,
+    selector_value: int,
+    block_ancillas: list[str],
+    system_qubits: list[str],
+) -> list[str]:
+    gate_line = f"{gate} {_format_gate_operands([selector_qubit, *block_ancillas, *system_qubits])};"
+    if selector_value == 1:
+        return [gate_line]
+    return [
+        f"x {selector_qubit};",
+        gate_line,
+        f"x {selector_qubit};",
+    ]
+
+
+def _controlled_selector_phase_block(
+    angle: float,
+    *,
+    selector_qubit: str,
+    component_selector_qubit: str,
+    selector_value: int,
+    phase_qubit: str,
+    block_ancillas: list[str],
+) -> list[str]:
+    open_control_angle = -angle
+    open_controls = [*block_ancillas]
+    solid_controls: list[str] = []
+    if selector_value == 0:
+        open_controls.append(selector_qubit)
+    else:
+        solid_controls.append(selector_qubit)
+    return [
+        *_open_mcx_controls(open_controls, solid_controls, phase_qubit),
+        *_controlled_select_rz(
+            open_control_angle,
+            selector_qubit=selector_qubit,
+            component_selector_qubit=component_selector_qubit,
+            selector_value=selector_value,
+            phase_qubit=phase_qubit,
+        ),
+        *_open_mcx_controls(open_controls, solid_controls, phase_qubit),
+    ]
+
+
+def _controlled_select_rz(
+    angle: float,
+    *,
+    selector_qubit: str,
+    component_selector_qubit: str,
+    selector_value: int,
+    phase_qubit: str,
+) -> list[str]:
+    outer_open: list[str] = []
+    outer_solid: list[str] = []
+    if selector_value == 0:
+        outer_open.append(selector_qubit)
+    else:
+        outer_solid.append(selector_qubit)
+
+    return [
+        *_multi_controlled_rz(
+            angle,
+            open_controls=[*outer_open, component_selector_qubit],
+            solid_controls=outer_solid,
+            target=phase_qubit,
+        ),
+        *_multi_controlled_rz(
+            -angle,
+            open_controls=outer_open,
+            solid_controls=[*outer_solid, component_selector_qubit],
+            target=phase_qubit,
+        ),
+    ]
+
+
+def _multi_controlled_rz(angle: float, *, open_controls: list[str], solid_controls: list[str], target: str) -> list[str]:
+    half_text = f"{angle / 2.0:.12g}"
+    neg_half_text = f"{-angle / 2.0:.12g}"
+    return [
+        *_open_mcx_controls(open_controls, solid_controls, target),
+        f"rz({neg_half_text}) {target};",
+        *_open_mcx_controls(open_controls, solid_controls, target),
+        f"rz({half_text}) {target};",
+    ]
+
+
 def _select_rz(angle: float, selector_qubit: str, phase_qubit: str) -> list[str]:
     half = angle / 2.0
     half_text = f"{half:.12g}"
@@ -577,11 +1172,15 @@ def _select_rz(angle: float, selector_qubit: str, phase_qubit: str) -> list[str]
 
 
 def _open_mcx_block(block_ancillas: list[str], phase_qubit: str) -> list[str]:
-    controls = ", ".join([*block_ancillas, phase_qubit])
+    return _open_mcx_controls(block_ancillas, [], phase_qubit)
+
+
+def _open_mcx_controls(open_controls: list[str], solid_controls: list[str], target: str) -> list[str]:
+    controls = ", ".join([*open_controls, *solid_controls, target])
     return [
-        *(f"x {block_ancilla};" for block_ancilla in block_ancillas),
+        *(f"x {control};" for control in open_controls),
         f"mcx {controls};",
-        *(f"x {block_ancilla};" for block_ancilla in reversed(block_ancillas)),
+        *(f"x {control};" for control in reversed(open_controls)),
     ]
 
 
@@ -645,3 +1244,31 @@ def _complex_coefficients(real_coeffs: list[float], imag_coeffs: list[float]) ->
         {"real": clean_float(real), "imag": clean_float(imag)}
         for real, imag in zip(real_padded, imag_padded)
     ]
+
+
+def _format_complex_coeff(real: float, imag: float, precision: int) -> str | None:
+    if real == 0.0 and imag == 0.0:
+        return None
+    if imag == 0.0:
+        return format_number(real, precision)
+    if real == 0.0:
+        return _format_imaginary(imag, precision)
+
+    sign = "+" if imag > 0 else "-"
+    return f"{format_number(real, precision)} {sign} {_format_imaginary(abs(imag), precision)}"
+
+
+def _format_imaginary(value: float, precision: int) -> str:
+    if value == 1.0:
+        return "i"
+    if value == -1.0:
+        return "-i"
+    if value < 0:
+        return f"-{format_number(abs(value), precision)}*i"
+    return f"{format_number(value, precision)}*i"
+
+
+def _coefficient_factor(coeff: str) -> str:
+    if " + " in coeff or " - " in coeff:
+        return f"({coeff})"
+    return coeff

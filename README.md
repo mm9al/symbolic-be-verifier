@@ -231,6 +231,62 @@ so `U_H = U_H^*`. Gates that require complex conjugation behavior, such as
 system-level `Y`, `S`, or `Sdg` inside `U_H`, are intentionally out of scope for
 this checkpoint.
 
+To generate the single selector-controlled Hamiltonian simulation block, use
+`--component full`. The first operand of `cUH`/`cUHdg` is the selector control;
+remaining ancilla operands are the block-encoding ancillas.
+
+```bash
+python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --component full --qasm-snippet \
+  --selector-qubit 'q[0]' \
+  --component-selector-qubit 'q[1]' \
+  --phase-qubit 'q[2]' \
+  --block-ancilla 'q[3]' \
+  --system-qubit 'q[4]'
+```
+
+The emitted full block prepares the selector, uses the cosine/sine common QSP
+skeleton with selector-controlled signed phase differences, extracts pyqsp's
+imaginary response with the component selector, then applies `sdg; h` to form
+the all-zero outer-selector branch:
+
+```text
+1/2 * (P_cos(H) - i P_sin(H))
+```
+
+The checked-in degree-3 full Hamiltonian simulation fixture uses:
+
+```text
+q[0] = Hamiltonian-simulation selector ancilla
+q[1] = QSP imaginary-part extraction selector ancilla
+q[2] = QSP phase ancilla
+q[3] = block-encoding ancilla
+q[4] = system qubit
+```
+
+Verify the degree-3 fixture with:
+
+```bash
+.venv/bin/python -m symbolic.verify \
+  examples/qsp_hamsim_full_t05_eps01/qsp_hamsim_full_t05_eps01_deg3.qasm \
+  --ancillas 'q[0]' 'q[1]' 'q[2]' 'q[3]' \
+  --systems 'q[4]' \
+  --expected-polynomial '0.24991946353954456 - 0.12497982382931781*i*x - 0.030604023458682638*x^2 + 0.005127459989174488*i*x^3' \
+  --hermitian-base \
+  --compare-polynomial-only
+```
+
+Verify the degree-5 fixture with:
+
+```bash
+.venv/bin/python -m symbolic.verify \
+  examples/qsp_hamsim_full_t05_eps1e-4/qsp_hamsim_full_t05_eps1e-4_deg5.qasm \
+  --ancillas 'q[0]' 'q[1]' 'q[2]' 'q[3]' \
+  --systems 'q[4]' \
+  --expected-polynomial '0.24999983177772669 - 0.12499995789742122*i*x - 0.031246969364139787*x^2 + 0.0052079962615880623*i*x^3 + 0.00064294590545715025*x^4 - 6.4429017930859816e-05*i*x^5' \
+  --hermitian-base \
+  --compare-polynomial-only
+```
+
 ## Abstract Multi-Control QSP
 
 The verifier supports a verifier-only abstract multi-controlled X gate:
@@ -270,6 +326,8 @@ Multi-ancilla `UH`/`UHdg` gates are accepted as abstract block encodings:
 ```qasm
 UH q[block_0], q[block_1], ..., q[system_0], ...;
 UHdg q[block_0], q[block_1], ..., q[system_0], ...;
+cUH q[selector], q[block_0], q[block_1], ..., q[system_0], ...;
+cUHdg q[selector], q[block_0], q[block_1], ..., q[system_0], ...;
 ```
 
 In word mode, the verifier tracks the all-zero block subspace and abstracts the

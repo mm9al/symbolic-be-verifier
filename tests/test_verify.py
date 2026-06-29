@@ -19,6 +19,7 @@ from symbolic.verify import (
     verify_qasm_file,
 )
 from symbolic.word_expr import WordExpr
+from symbolic.word_expr import atom as word_atom
 
 
 def test_h_on_ancilla_update():
@@ -301,6 +302,62 @@ def test_uhdg_uh_opaque_reduces_to_identity():
     assert result.status == PASS
     assert result.qsp_normalized == WordExpr.identity()
     assert result.qsp_polynomial == 1
+
+
+def test_controlled_uh_only_updates_selected_selector_branch():
+    state = BranchState(
+        2,
+        1,
+        {
+            (0, 0): WordExpr.identity(),
+            (0, 1): word_atom("H"),
+            (1, 0): WordExpr.identity(),
+            (1, 1): word_atom("H"),
+        },
+        expression_kind="word",
+    )
+
+    state = state.apply(Gate("cUH", (0, 1, 2)), ancillas=(0, 1), systems=(2,))
+
+    assert state.branch((0, 0)).equals(WordExpr.identity())
+    assert state.branch((0, 1)).equals(word_atom("H"))
+    assert state.branch((1, 0)).equals(word_atom("H") + word_atom("G") * word_atom("H"))
+    assert state.branch((1, 1)).equals(word_atom("A") + word_atom("C") * word_atom("H"))
+
+
+def test_controlled_uhdg_uses_dagger_blocks_on_selected_selector_branch():
+    state = BranchState(
+        2,
+        1,
+        {
+            (0, 0): WordExpr.identity(),
+            (1, 0): WordExpr.identity(),
+            (1, 1): word_atom("H"),
+        },
+        expression_kind="word",
+    )
+
+    state = state.apply(Gate("cUHdg", (0, 1, 2)), ancillas=(0, 1), systems=(2,))
+
+    assert state.branch((0, 0)).equals(WordExpr.identity())
+    assert state.branch((1, 0)).equals(word_atom("Hd") + word_atom("Ad") * word_atom("H"))
+    assert state.branch((1, 1)).equals(word_atom("Gd") + word_atom("Cd") * word_atom("H"))
+
+
+def test_parser_accepts_controlled_opaque_uh_declarations():
+    gates = parse_qasm_text(
+        """
+        OPENQASM 2.0;
+        opaque cUH c, a, s;
+        opaque cUHdg c, a, s;
+        qreg q[3];
+        cUH q[0], q[1], q[2];
+        cUHdg q[0], q[1], q[2];
+        """
+    )
+
+    assert [gate.name for gate in gates] == ["cuh", "cuhdg"]
+    assert gates[0].qubits == (0, 1, 2)
 
 
 def test_qsp_t3_opaque_verifies_chebyshev_polynomial_on_hermitian_base():

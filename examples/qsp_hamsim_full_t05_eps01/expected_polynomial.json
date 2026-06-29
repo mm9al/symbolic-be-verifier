@@ -1,0 +1,36 @@
+{
+  "block_ancillas": [
+    "q[3]"
+  ],
+  "component": "full",
+  "component_selector_qubit": "q[1]",
+  "degree": 3,
+  "ensure_bounded": true,
+  "epsilon": 0.1,
+  "phase_qubit": "q[2]",
+  "polynomial": "0.24991946353954456 - 0.12497982382931781*i*x - 0.030604023458682638*x^2 + 0.005127459989174488*i*x^3",
+  "qasm": "examples/qsp_hamsim_full_t05_eps01/qsp_hamsim_full_t05_eps01_deg3.qasm",
+  "scale": 0.5,
+  "selector_qubit": "q[0]",
+  "system_qubits": [
+    "q[4]"
+  ],
+  "tau": 0.5,
+  "verification_command": [
+    ".venv/bin/python",
+    "-m",
+    "symbolic.verify",
+    "examples/qsp_hamsim_full_t05_eps01/qsp_hamsim_full_t05_eps01_deg3.qasm",
+    "--ancillas",
+    "q[0]",
+    "q[1]",
+    "q[2]",
+    "q[3]",
+    "--systems",
+    "q[4]",
+    "--expected-polynomial",
+    "0.24991946353954456 - 0.12497982382931781*i*x - 0.030604023458682638*x^2 + 0.005127459989174488*i*x^3",
+    "--hermitian-base",
+    "--compare-polynomial-only"
+  ]
+}

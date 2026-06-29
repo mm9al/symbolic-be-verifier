@@ -94,7 +94,7 @@ def run_circuit(
     ancilla_qubits = _normalize_ancillas(ancilla=ancilla, ancillas=ancillas)
     system_qubits = _normalize_systems(system=system, systems=systems)
     if expression_kind is None:
-        expression_kind = "word" if any(gate.name.lower() in {"uh", "uhdg"} for gate in gates) else "op"
+        expression_kind = "word" if any(gate.name.lower() in {"uh", "uhdg", "cuh", "cuhdg"} for gate in gates) else "op"
     state = BranchState.initial(
         num_system_qubits=len(system_qubits),
         num_ancillas=len(ancilla_qubits),
@@ -129,7 +129,11 @@ def verify_qasm_file(
     ancilla_qubits = _normalize_ancillas(ancilla=ancilla, ancillas=ancillas)
     system_qubits = _normalize_systems(system=system, systems=systems)
     expected_expr = _normalize_expected(expected, num_system_qubits=len(system_qubits))
-    expression_kind = "word" if expected_polynomial is not None or any(gate.name.lower() in {"uh", "uhdg"} for gate in gates) else "op"
+    expression_kind = (
+        "word"
+        if expected_polynomial is not None or any(gate.name.lower() in {"uh", "uhdg", "cuh", "cuhdg"} for gate in gates)
+        else "op"
+    )
     result = run_circuit(
         gates,
         ancillas=ancilla_qubits,
