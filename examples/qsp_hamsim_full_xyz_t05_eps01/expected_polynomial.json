@@ -1,5 +1,5 @@
 {
-  "assumption": "Hermitian base H = (X + Y + Z)/3; selector wrappers use C^dagger from reverse-order adjoint gates, and Hd is rewritten to H for polynomial evaluation",
+  "assumption": "Hermitian base H = (X + Y + Z)/3; full block shares the cosine/sine QSP signal skeleton and multiplexes signed phase gadgets; UHdg is interpreted as an adjoint block and Hd is rewritten to H for polynomial evaluation",
   "base": "(X + Y + Z)/3",
   "base_description": "H = (X + Y + Z)/3",
   "block_ancillas": [

@@ -1,5 +1,5 @@
 {
-  "assumption": "Hermitian base: selector wrappers use C^dagger from reverse-order adjoint gates, and Hd is rewritten to H for polynomial evaluation",
+  "assumption": "Hermitian base: full block shares the cosine/sine QSP signal skeleton and multiplexes signed phase gadgets; UHdg is interpreted as an adjoint block and Hd is rewritten to H for polynomial evaluation",
   "block_ancillas": [
     "q[3]"
   ],

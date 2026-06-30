@@ -93,7 +93,7 @@ def test_raw_qsp_dagger_gate_list_reverses_phase_and_signal_order():
     assert dag_angles == [-angle for angle in reversed(raw_angles)]
 
 
-def test_full_hamsim_qasm_snippet_uses_adjoint_extraction_and_outer_lcu():
+def test_full_hamsim_qasm_snippet_uses_interleaved_phase_multiplexing():
     cos_record = {
         "component": "cos",
         "pyqsp_phases": [0.0, 0.0, 0.0],
@@ -121,19 +121,21 @@ def test_full_hamsim_qasm_snippet_uses_adjoint_extraction_and_outer_lcu():
         controlled_signal_gate_dagger="cUHdg",
     )
 
-    assert "// cos C branch: selector = 0, component selector = 0" in snippet
-    assert "// cos Cdag branch: selector = 0, component selector = 1" in snippet
-    assert "// sin C branch: selector = 1, component selector = 0" in snippet
-    assert "// sin Cdag branch: selector = 1, component selector = 1" in snippet
-    assert "ccUH q[1], q[0], q[3], q[4];" in snippet
-    assert "ccUHdg q[1], q[0], q[3], q[4];" in snippet
-    assert "// extract (C - Cdag)/(2i) on the component selector" in snippet
-    assert "z q[1];\nh q[1];\nrz(3.14159265359) q[1];" in snippet
+    assert "// common phase 0" in snippet
+    assert "// extra signed difference phase on sin branch only" in snippet
+    assert "// common U" in snippet
+    assert "// common U^\\dagger" in snippet
+    assert "// sin-only final U" in snippet
+    assert "cUH q[0], q[3], q[4];" in snippet
+    assert "ccUH" not in snippet
+    assert "Cdag branch" not in snippet
+    assert "// extract pyqsp imaginary response on the component selector" in snippet
+    assert "h q[1];\ns q[1];\nx q[1];" in snippet
     assert "// combine 1/2 * (E_cos - i E_sin)" in snippet
-    assert snippet.endswith("sdg q[0];\nh q[0];\nrz(6.28318530718) q[0];")
+    assert snippet.endswith("sdg q[0];\nh q[0];")
 
 
-def test_full_hamsim_qasm_snippet_uses_same_imag_extraction_for_sine_degree():
+def test_full_hamsim_qasm_snippet_uses_degree_dependent_component_extraction():
     cos_record = {
         "component": "cos",
         "pyqsp_phases": [0.0] * 5,
@@ -161,8 +163,8 @@ def test_full_hamsim_qasm_snippet_uses_same_imag_extraction_for_sine_degree():
         controlled_signal_gate_dagger="cUHdg",
     )
 
-    assert "sdg q[1];\nx q[1];" not in snippet
-    assert "z q[1];\nh q[1];\nrz(3.14159265359) q[1];" in snippet
+    assert "ccUH" not in snippet
+    assert "h q[1];\nsdg q[1];\nx q[1];" in snippet
 
 
 @pytest.mark.parametrize(

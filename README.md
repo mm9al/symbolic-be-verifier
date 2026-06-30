@@ -110,34 +110,10 @@ Verification results:
 - `PASS_UP_TO_GLOBAL_PHASE`: final all-zero branch is `phase * expected` and `|phase| = 1`.
 - `FAIL`: final all-zero branch is neither exactly equal nor equal up to a global phase.
 
-## Hamiltonian Simulation QSP Data
+## QSP Verification
 
-QSP generation lives in `symbolic.qsp`; `tools/hamsim_qsp.py` is a command-line
-wrapper around that module. Use the tool to generate selector-wrapped
-Hamiltonian-simulation cosine and sine QASM examples. Synthesis needs pyqsp's
-scientific Python dependencies (`numpy`, `scipy`, `matplotlib`), so run it with
-an environment that has pyqsp available, not the minimal verifier `.venv`.
-
-```bash
-python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --write-examples
-```
-
-This writes both selector examples into one folder, plus polynomial metadata:
-
-```text
-examples/qsp_hamsim_t05_eps1e-4/
-  qsp_hamsim_cos_selector_t05_eps1e-4_deg4.qasm
-  qsp_hamsim_sin_selector_t05_eps1e-4_deg5.qasm
-  expected_polynomials.json
-```
-
-The original pyqsp component circuits place the target polynomial in the
-imaginary part of the top-left block. The selector examples add `q[m+1]`, run the
-`theta` and `-theta` branches coherently, extract their difference, multiply by
-`-i`, and move the result to the all-zero branch. The final block is therefore
-directly `P_cos(H)` or `P_sin(H)`, so the verifier compares the full polynomial.
-
-QSP selector examples use one layout for every `m >= 1`:
+For QSP word-mode circuits, pass the QSP phase ancilla, block-encoding
+ancillas, and system qubits explicitly. The examples use this layout:
 
 ```text
 q[0]       = QSP phase ancilla
@@ -160,82 +136,43 @@ theta_rz = -2 * psi
 Use `--compare-polynomial-only` to compare polynomial coefficients directly
 instead of evaluating the polynomial on `--base`.
 
+Ordinary QSP verification example:
+
 ```bash
-.venv/bin/python -m symbolic.verify examples/qsp_hamsim_t05_eps1e-4/qsp_hamsim_cos_selector_t05_eps1e-4_deg4.qasm \
-  --ancillas 'q[0]' 'q[1]' 'q[2]' \
-  --systems 'q[3]' \
-  --expected-polynomial '0.49999966355545339 - 0.062493938728279574*x^2 + 0.0012858918109143005*x^4' \
+.venv/bin/python -m symbolic.verify examples/qsp_t3_opaque.qasm \
+  --ancillas 'q[0]' 'q[1]' \
+  --systems 'q[2]' \
+  --base '(X + Z)/2' \
+  --expected-polynomial '4*x^3 - 3*x' \
   --hermitian-base \
-  --compare-polynomial-only
+  --result-only
 ```
 
+Polynomial-only check:
+
 ```bash
-.venv/bin/python -m symbolic.verify examples/qsp_hamsim_t05_eps1e-4/qsp_hamsim_sin_selector_t05_eps1e-4_deg5.qasm \
-  --ancillas 'q[0]' 'q[1]' 'q[2]' \
-  --systems 'q[3]' \
-  --expected-polynomial '0.24999991579484243*x - 0.010415992523176125*x^3 + 0.00012885803586171963*x^5' \
+.venv/bin/python -m symbolic.verify examples/qsp_t3_opaque.qasm \
+  --ancillas 'q[0]' 'q[1]' \
+  --systems 'q[2]' \
+  --expected-polynomial '4*x^3 - 3*x' \
   --hermitian-base \
-  --compare-polynomial-only
-```
-
-The checked-in `examples/qsp_hamsim_t05_eps1e-4` fixture is the `m = 1`
-regression case:
-
-```text
-phase ancilla     q[0]
-block ancilla     q[1]
-selector ancilla  q[2]
-system qubit      q[3]
-```
-
-Run the regression with:
-
-```bash
-.venv/bin/python -m pytest tests/test_qsp.py
-```
-
-This verifies that both checked-in selector circuits still synthesize and verify
-as:
-
-```text
-m = 1 block ancilla -> qsp cos/sin synthesis PASS
-```
-
-The checked-in `examples/qsp_hamsim_t05_eps1e-4_m2` fixture is the `m = 2`
-cos/sin regression:
-
-```text
-phase ancilla     q[0]
-block ancillas    q[1], q[2]
-selector ancilla  q[3]
-system qubit      q[4]
-```
-
-Run the shared cos/sin regression with:
-
-```bash
-.venv/bin/python -m pytest tests/test_qsp.py::test_qsp_cos_sin_regression_passes_for_block_ancillas
-```
-
-Generate fresh multi-ancilla selector examples with pyqsp available:
-
-```bash
-python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --write-examples \
-  --block-ancillas 'q[1]' 'q[2]' \
-  --selector-qubit 'q[3]' \
-  --system-qubits 'q[4]'
+  --compare-polynomial-only \
+  --result-only
 ```
 
 The verifier treats `UHdg` as an adjoint block, not as elementwise complex
 conjugation. With `--hermitian-base`, word-mode normalization rewrites `Hd` to
 `H`, so polynomial evaluation only relies on `H^\dagger = H`; it does not
-require a real block encoding with `H^* = H`. The regression suite includes the
-minimal discriminator `H = Y`, where `Y^* = -Y` but `Y^\dagger = Y`, before also
-checking the mixed Hermitian base `(X + Y + Z)/3`.
+require a real block encoding with `H^* = H`.
 
-To generate the single selector-controlled Hamiltonian simulation block, use
-`--component full`. The first operand of `cUH`/`cUHdg` is the selector control;
-remaining ancilla operands are the block-encoding ancillas.
+## Hamiltonian Simulation Verification
+
+QSP generation lives in `symbolic.qsp`; `tools/hamsim_qsp.py` is a command-line
+wrapper around that module. Synthesis needs pyqsp's scientific Python
+dependencies (`numpy`, `scipy`, `matplotlib`), so run it with an environment
+that has pyqsp available, not the minimal verifier `.venv`.
+
+Generate a full Hamiltonian-simulation QASM block:
 
 ```bash
 python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --component full --qasm-snippet \
@@ -246,13 +183,8 @@ python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --component full --qasm-sni
   --system-qubit 'q[4]'
 ```
 
-The emitted full block prepares the selector, shares the cosine/sine QSP signal
-skeleton, and multiplexes only the signed phase gadgets. Each common layer first
-applies the cosine signed phase, then selector `1` adds the sine-cosine phase
-difference. The sine branch gets one final controlled `U_H` and signed phase.
-The component selector then extracts pyqsp's imaginary response, using `s` or
-`sdg` according to the sine degree parity, before the outer `sdg; h` forms the
-all-zero selector branch:
+The full block shares the cosine/sine QSP signal skeleton and multiplexes the
+signed phase gadgets. The all-zero selector branch is:
 
 ```text
 1/2 * (P_cos(H) - i P_sin(H))
@@ -359,12 +291,4 @@ Run the abstract QSP regressions with:
 
 ```bash
 .venv/bin/python -m pytest tests/test_qsp.py::test_qsp_mcx_t3_passes_for_block_ancillas
-```
-
-For debugging the raw component data without writing files:
-
-```bash
-python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --component both --format json
-python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --component cos-selector --qasm-snippet
-python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --component sin-selector --qasm-snippet
 ```

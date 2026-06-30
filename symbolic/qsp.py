@@ -293,65 +293,87 @@ def full_hamsim_qasm_snippet(
 ) -> str:
     block_ancillas = _normalize_qubit_list(block_ancillas, label="block ancilla")
     system_qubits = _normalize_qubit_list(system_qubits, label="system qubit")
+    if len(block_ancillas) != 1:
+        raise ValueError("full Hamiltonian simulation currently expects one block-encoding ancilla")
+    if len(system_qubits) != 1:
+        raise ValueError("full Hamiltonian simulation currently expects one system qubit")
+    if len(sin_record["qsvt_projector_phases"]) != len(cos_record["qsvt_projector_phases"]) + 1:
+        raise ValueError("full Hamiltonian simulation expects one more sine phase than cosine phase")
 
-    cos_raw = build_raw_qsp_gate_list(
-        cos_record["pyqsp_phases"],
-        cos_record["qsvt_projector_phases"],
-        cos_record["qasm_rz_angles"],
-        phase_qubit=phase_qubit,
-        block_ancillas=block_ancillas,
-        system_qubits=system_qubits,
-        signal_gate=signal_gate,
-        signal_gate_dagger=signal_gate_dagger,
-    )
-    sin_raw = build_raw_qsp_gate_list(
-        sin_record["pyqsp_phases"],
-        sin_record["qsvt_projector_phases"],
-        sin_record["qasm_rz_angles"],
-        phase_qubit=phase_qubit,
-        block_ancillas=block_ancillas,
-        system_qubits=system_qubits,
-        signal_gate=signal_gate,
-        signal_gate_dagger=signal_gate_dagger,
-    )
-    cos_dagger = daggerize_gate_list(cos_raw, signal_gate=signal_gate, signal_gate_dagger=signal_gate_dagger)
-    sin_dagger = daggerize_gate_list(sin_raw, signal_gate=signal_gate, signal_gate_dagger=signal_gate_dagger)
+    block_ancilla = block_ancillas[0]
 
     lines: list[str] = []
     lines.append(f"h {selector_qubit};")
     lines.append(f"h {component_selector_qubit};")
     lines.append("")
 
-    for label, gates, outer_value, component_value in (
-        ("cos C branch", cos_raw, 0, 0),
-        ("cos Cdag branch", cos_dagger, 0, 1),
-        ("sin C branch", sin_raw, 1, 0),
-        ("sin Cdag branch", sin_dagger, 1, 1),
-    ):
-        lines.append(f"// {label}: selector = {outer_value}, component selector = {component_value}")
+    for idx, cos_psi in enumerate(cos_record["qsvt_projector_phases"]):
+        sin_psi = sin_record["qsvt_projector_phases"][idx]
+        delta = clean_float(sin_psi - cos_psi)
+        lines.append(f"// common phase {idx}")
+        lines.append(f"// cos phi_{idx} = {cos_record['pyqsp_phases'][idx]:.12g}")
+        lines.append(f"// cos psi_{idx} = {cos_psi:.12g}")
+        lines.append(f"// sin phi_{idx} = {sin_record['pyqsp_phases'][idx]:.12g}")
+        lines.append(f"// sin psi_{idx} = {sin_psi:.12g}")
+        lines.append(f"// Delta_{idx} = sin psi_{idx} - cos psi_{idx} = {delta:.12g}")
         lines.extend(
-            _controlled_gate_list_lines(
-                gates,
-                controls=[(selector_qubit, outer_value), (component_selector_qubit, component_value)],
-                signal_gate=signal_gate,
-                signal_gate_dagger=signal_gate_dagger,
-                controlled_signal_gate=controlled_signal_gate,
-                controlled_signal_gate_dagger=controlled_signal_gate_dagger,
+            _base_signed_phase(
+                cos_psi,
+                component_selector_qubit=component_selector_qubit,
+                phase_qubit=phase_qubit,
+                block_ancilla=block_ancilla,
+            )
+        )
+        lines.append("")
+        lines.append("// extra signed difference phase on sin branch only")
+        lines.extend(
+            _controlled_signed_phase(
+                delta,
+                selector_qubit=selector_qubit,
+                component_selector_qubit=component_selector_qubit,
+                phase_qubit=phase_qubit,
+                block_ancilla=block_ancilla,
             )
         )
         lines.append("")
 
-    lines.append("// extract (C - Cdag)/(2i) on the component selector")
-    lines.append(f"z {component_selector_qubit};")
+        if idx == len(cos_record["qsvt_projector_phases"]) - 1:
+            continue
+
+        use_dagger = idx % 2 == 1
+        gate = signal_gate_dagger if use_dagger else signal_gate
+        label = "common U^\\dagger" if use_dagger else "common U"
+        lines.append(f"// {label}")
+        lines.append(f"{gate} {_format_gate_operands([*block_ancillas, *system_qubits])};")
+        lines.append("")
+
+    final_idx = len(cos_record["qsvt_projector_phases"])
+    final_sin_psi = sin_record["qsvt_projector_phases"][final_idx]
+    lines.append("// sin-only final U")
+    lines.append(f"{controlled_signal_gate} {_format_gate_operands([selector_qubit, *block_ancillas, *system_qubits])};")
+    lines.append("")
+    lines.append(f"// final sin-only phase {final_idx}")
+    lines.append(f"// sin phi_{final_idx} = {sin_record['pyqsp_phases'][final_idx]:.12g}")
+    lines.append(f"// sin psi_{final_idx} = {final_sin_psi:.12g}")
+    lines.extend(
+        _controlled_signed_phase(
+            final_sin_psi,
+            selector_qubit=selector_qubit,
+            component_selector_qubit=component_selector_qubit,
+            phase_qubit=phase_qubit,
+            block_ancilla=block_ancilla,
+        )
+    )
+    lines.append("")
+
+    lines.append("// extract pyqsp imaginary response on the component selector")
     lines.append(f"h {component_selector_qubit};")
-    lines.append(f"rz(3.14159265359) {component_selector_qubit};")
+    lines.append(f"{_component_extraction_phase_gate(int(sin_record.get('degree', len(sin_record['pyqsp_phases']) - 1)))} {component_selector_qubit};")
+    lines.append(f"x {component_selector_qubit};")
     lines.append("")
     lines.append("// combine 1/2 * (E_cos - i E_sin)")
     lines.append(f"sdg {selector_qubit};")
     lines.append(f"h {selector_qubit};")
-    sin_degree = int(sin_record.get("degree", len(sin_record["pyqsp_phases"]) - 1))
-    if _full_hamsim_needs_global_sign_flip(sin_degree):
-        lines.append(f"rz(6.28318530718) {selector_qubit};")
     return "\n".join(lines)
 
 
@@ -398,24 +420,7 @@ def full_hamsim_qasm_file(
     block_comment = "\n".join(f"// {qubit} = block-encoding ancilla[{index}]" for index, qubit in enumerate(block_ancillas))
     system_comment = "\n".join(f"// {qubit} = system qubit[{index}]" for index, qubit in enumerate(system_qubits))
     controlled_signature = _opaque_signature(["c", *[f"a{index}" for index in range(len(block_ancillas))]], [f"s{index}" for index in range(len(system_qubits))])
-    double_controlled_signature = _opaque_signature(["c0", "c1", *[f"a{index}" for index in range(len(block_ancillas))]], [f"s{index}" for index in range(len(system_qubits))])
     mcx_signature = _opaque_signature(["selector", *[f"c{index}" for index in range(len(block_ancillas))]], ["t"])
-    double_controlled_signal_gate = _controlled_signal_gate_name(
-        2,
-        dagger=False,
-        signal_gate=signal_gate,
-        signal_gate_dagger=signal_gate_dagger,
-        controlled_signal_gate=controlled_signal_gate,
-        controlled_signal_gate_dagger=controlled_signal_gate_dagger,
-    )
-    double_controlled_signal_gate_dagger = _controlled_signal_gate_name(
-        2,
-        dagger=True,
-        signal_gate=signal_gate,
-        signal_gate_dagger=signal_gate_dagger,
-        controlled_signal_gate=controlled_signal_gate,
-        controlled_signal_gate_dagger=controlled_signal_gate_dagger,
-    )
 
     return f"""OPENQASM 2.0;
 include "qelib1.inc";
@@ -424,8 +429,6 @@ opaque {signal_gate} {controlled_signature.removeprefix("c, ")};
 opaque {signal_gate_dagger} {controlled_signature.removeprefix("c, ")};
 opaque {controlled_signal_gate} {controlled_signature};
 opaque {controlled_signal_gate_dagger} {controlled_signature};
-opaque {double_controlled_signal_gate} {double_controlled_signature};
-opaque {double_controlled_signal_gate_dagger} {double_controlled_signature};
 opaque mcx {mcx_signature};
 
 qreg q[{qreg_size}];
@@ -437,10 +440,11 @@ qreg q[{qreg_size}];
 {system_comment}
 
 // Full Hamiltonian simulation QSP block generated by tools/hamsim_qsp.py.
-// The component selector extracts each raw pyqsp response as
-// (C - C^dagger)/(2i), using a true reverse-order adjoint branch. The outer
-// selector then combines the extracted components as
-// 1/2 * (P_cos(H) - i P_sin(H)).
+// The outer selector multiplexes the QSP phases: each common layer applies the
+// cosine signed phase, then selector |1> adds the sine-cosine phase difference.
+// The common U_H/U_Hdg skeleton is shared; only the sine branch has the final
+// extra U_H and phase. The component selector extracts pyqsp's imaginary
+// response before the outer sdg+h combines P_cos(H) - i P_sin(H).
 //
 // P_cos(x) = {cos_polynomial}
 // P_sin(x) = {sin_polynomial}
@@ -769,7 +773,7 @@ def write_full_hamsim_example(
         "tau": tau,
         "epsilon": epsilon,
         "ensure_bounded": ensure_bounded,
-        "assumption": "Hermitian base: selector wrappers use C^dagger from reverse-order adjoint gates, and Hd is rewritten to H for polynomial evaluation",
+        "assumption": "Hermitian base: full block shares the cosine/sine QSP signal skeleton and multiplexes signed phase gadgets; UHdg is interpreted as an adjoint block and Hd is rewritten to H for polynomial evaluation",
         "scale": record["scale"],
         "selector_qubit": selector_qubit,
         "component_selector_qubit": component_selector_qubit,
