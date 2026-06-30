@@ -1,5 +1,5 @@
 {
-  "assumption": "real block encoding: UH = UHdg",
+  "assumption": "Hermitian base: selector wrappers use C^dagger from reverse-order adjoint gates, and Hd is rewritten to H for polynomial evaluation",
   "block_ancillas": [
     "q[1]",
     "q[2]"

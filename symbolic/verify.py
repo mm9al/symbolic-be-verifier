@@ -94,7 +94,7 @@ def run_circuit(
     ancilla_qubits = _normalize_ancillas(ancilla=ancilla, ancillas=ancillas)
     system_qubits = _normalize_systems(system=system, systems=systems)
     if expression_kind is None:
-        expression_kind = "word" if any(gate.name.lower() in {"uh", "uhdg", "cuh", "cuhdg"} for gate in gates) else "op"
+        expression_kind = "word" if any(_is_qsp_word_gate(gate.name) for gate in gates) else "op"
     state = BranchState.initial(
         num_system_qubits=len(system_qubits),
         num_ancillas=len(ancilla_qubits),
@@ -131,7 +131,7 @@ def verify_qasm_file(
     expected_expr = _normalize_expected(expected, num_system_qubits=len(system_qubits))
     expression_kind = (
         "word"
-        if expected_polynomial is not None or any(gate.name.lower() in {"uh", "uhdg", "cuh", "cuhdg"} for gate in gates)
+        if expected_polynomial is not None or any(_is_qsp_word_gate(gate.name) for gate in gates)
         else "op"
     )
     result = run_circuit(
@@ -162,7 +162,11 @@ def verify_qasm_file(
         if qsp_normalized.has_any_atom(GARBAGE_ATOMS):
             qsp_status = FAIL_GARBAGE
         else:
-            qsp_polynomial = convert_h_word_to_polynomial(qsp_normalized)
+            qsp_polynomial = (
+                convert_hermitian_word_to_polynomial(top_left)
+                if hermitian_base
+                else convert_h_word_to_polynomial(qsp_normalized)
+            )
             qsp_expected_polynomial = parse_polynomial(expected_polynomial)
             if compare_polynomial_only:
                 qsp_status = PASS if polynomial_close(qsp_polynomial, qsp_expected_polynomial, tol=tolerance) else FAIL
@@ -262,6 +266,11 @@ def _normalize_base(base: str | OpExpr, *, num_system_qubits: int) -> OpExpr:
     return parse_operator_expression(base, num_qubits=num_system_qubits)
 
 
+def _is_qsp_word_gate(name: str) -> bool:
+    lowered = name.lower()
+    return lowered in {"uh", "uhdg"} or re.fullmatch(r"c+uh(?:dg)?", lowered) is not None
+
+
 def scalar_close(a: sp.Expr, b: sp.Expr, *, tol: float = DEFAULT_TOLERANCE) -> bool:
     diff = scalar_simplify(sp.sympify(a) - sp.sympify(b))
     if diff == 0:
@@ -303,6 +312,33 @@ def convert_h_word_to_polynomial(expr: WordExpr) -> sp.Expr:
             raise ValueError(f"Cannot convert non-H word to polynomial: {word!r}")
         polynomial += coeff * x ** len(word)
     return scalar_simplify(sp.expand(polynomial))
+
+
+def convert_hermitian_word_to_polynomial(expr: WordExpr) -> sp.Expr:
+    x = sp.Symbol("x")
+    s = sp.Symbol("_qsp_s")
+    atom_values = {
+        "H": x,
+        "Hd": x,
+        "G": s,
+        "Gd": s,
+        "A": s,
+        "Ad": s,
+        "C": -x,
+        "Cd": -x,
+    }
+    value = sp.Integer(0)
+    for word, coeff in expr.terms.items():
+        term = coeff
+        for atom in word:
+            term *= atom_values[atom]
+        value += term
+
+    reduced = sp.Poly(sp.expand(value), s).rem(sp.Poly(s**2 - (1 - x**2), s)).as_expr()
+    reduced = scalar_simplify(sp.expand(reduced))
+    if s in reduced.free_symbols:
+        raise ValueError(f"Cannot convert Hermitian word expression with uncancelled block-complement terms: {expr!r}")
+    return reduced
 
 
 def parse_polynomial(polynomial: str | sp.Expr) -> sp.Expr:

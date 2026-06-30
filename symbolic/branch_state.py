@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Dict, Literal, Mapping, Optional, Sequence, Tuple, Union
 
 import sympy as sp
@@ -126,10 +127,12 @@ class BranchState:
         if name in {"uh", "uhdg"}:
             return self._apply_block_encoding_gate(name, gate.qubits, ancillas=ancilla_qubits, systems=system_qubits)
 
-        if name in {"cuh", "cuhdg"}:
+        control_count = _controlled_uh_control_count(name)
+        if control_count is not None:
             return self._apply_controlled_block_encoding_gate(
                 name,
                 gate.qubits,
+                control_count=control_count,
                 ancillas=ancilla_qubits,
                 systems=system_qubits,
             )
@@ -234,17 +237,19 @@ class BranchState:
         name: str,
         qubits: Tuple[int, ...],
         *,
+        control_count: int,
         ancillas: Tuple[int, ...],
         systems: Tuple[int, ...],
     ) -> "BranchState":
-        if len(qubits) < 3:
-            raise UnsupportedGateError(f"{name} requires a selector control, block ancilla, and system qubit")
+        if len(qubits) < control_count + 2:
+            raise UnsupportedGateError(f"{name} requires selector controls, a block ancilla, and a system qubit")
 
-        control_index = _qubit_index(qubits[0], ancillas)
-        if control_index is None:
-            raise UnsupportedGateError(f"{name} first operand must be a selector ancilla control")
+        control_indices = tuple(_qubit_index(qubit, ancillas) for qubit in qubits[:control_count])
+        if any(index is None for index in control_indices):
+            raise UnsupportedGateError(f"{name} first operands must be selector ancilla controls")
+        controls = tuple(index for index in control_indices if index is not None)
 
-        operands = qubits[1:]
+        operands = qubits[control_count:]
         block_indices = tuple(index for qubit in operands if (index := _qubit_index(qubit, ancillas)) is not None)
         system_indices = tuple(index for qubit in operands if (index := _qubit_index(qubit, systems)) is not None)
         unknown = tuple(
@@ -253,13 +258,15 @@ class BranchState:
 
         if unknown:
             raise UnsupportedGateError(f"{name} operands must be known ancilla/system qubits: {qubits}")
-        if control_index in block_indices:
-            raise UnsupportedGateError(f"{name} selector control cannot also be a block ancilla")
+        if any(control in block_indices for control in controls):
+            raise UnsupportedGateError(f"{name} selector controls cannot also be block ancillas")
+        if len(set(controls)) != len(controls):
+            raise UnsupportedGateError(f"{name} selector controls must be distinct")
         if not block_indices or not system_indices:
             raise UnsupportedGateError(f"{name} must include at least one block ancilla and one system qubit")
         if len(set(block_indices)) != len(block_indices):
             raise UnsupportedGateError(f"{name} has duplicate block ancilla operands")
-        return self._apply_controlled_multi_uh(control_index, block_indices, dagger=(name == "cuhdg"))
+        return self._apply_controlled_multi_uh(controls, block_indices, dagger=name.endswith("uhdg"))
 
     def _apply_mcx_gate(self, qubits: Tuple[int, ...], *, ancillas: Tuple[int, ...]) -> "BranchState":
         if len(qubits) < 2:
@@ -373,7 +380,7 @@ class BranchState:
 
     def _apply_controlled_multi_uh(
         self,
-        control_index: int,
+        control_indices: Tuple[int, ...],
         block_indices: Tuple[int, ...],
         *,
         dagger: bool,
@@ -387,9 +394,13 @@ class BranchState:
             top_left, top_right, bottom_left, bottom_right = "H", "G", "A", "C"
 
         new: Dict[BranchKey, BranchValue] = {
-            key: branch for key, branch in self.branches.items() if key[control_index] == 0
+            key: branch for key, branch in self.branches.items() if not all(key[index] == 1 for index in control_indices)
         }
-        group_keys = {_clear_bits(key, block_indices) for key in self.branches if key[control_index] == 1}
+        group_keys = {
+            _clear_bits(key, block_indices)
+            for key in self.branches
+            if all(key[index] == 1 for index in control_indices)
+        }
 
         for zero_key in sorted(group_keys):
             complement_key = _canonical_complement_key(zero_key, block_indices)
@@ -510,6 +521,13 @@ def _normalize_systems(*, system: int, systems: Optional[Sequence[int]]) -> Tupl
     if len(set(normalized)) != len(normalized):
         raise ValueError(f"Duplicate system qubits are not allowed: {normalized}")
     return normalized
+
+
+def _controlled_uh_control_count(name: str) -> Optional[int]:
+    match = re.fullmatch(r"(c+)uh(?:dg)?", name)
+    if match is None:
+        return None
+    return len(match.group(1))
 
 
 def _qubit_index(qasm_qubit: int, qubits: Tuple[int, ...]) -> Optional[int]:

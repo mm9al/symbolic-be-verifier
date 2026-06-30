@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+from dataclasses import dataclass
 import io
 import json
 import os
@@ -8,6 +9,13 @@ import re
 import sys
 from pathlib import Path
 from typing import Any
+
+
+@dataclass(frozen=True)
+class QasmGate:
+    name: str
+    qubits: tuple[str, ...]
+    parameter: float | None = None
 
 
 def clean_float(value: Any, *, zero_tol: float = 1e-14) -> float:
@@ -110,6 +118,71 @@ def qasm_phase_data(phases: list[float]) -> tuple[list[float], list[float]]:
     return clean_list(qsvt_phases), clean_list(rz_angles)
 
 
+def build_raw_qsp_gate_list(
+    pyqsp_phases: list[float],
+    qsvt_projector_phases: list[float],
+    qasm_rz_angles: list[float],
+    *,
+    phase_qubit: str,
+    block_ancillas: list[str],
+    system_qubits: list[str],
+    signal_gate: str,
+    signal_gate_dagger: str,
+) -> list[QasmGate]:
+    block_ancillas = _normalize_qubit_list(block_ancillas, label="block ancilla")
+    system_qubits = _normalize_qubit_list(system_qubits, label="system qubit")
+    gates: list[QasmGate] = []
+    for idx, theta in enumerate(qasm_rz_angles):
+        gates.extend(_phase_block_gates(-theta, phase_qubit, block_ancillas))
+        if idx == len(pyqsp_phases) - 1:
+            continue
+
+        use_dagger = idx % 2 == 1
+        gate = signal_gate_dagger if use_dagger else signal_gate
+        gates.append(QasmGate(gate, tuple([*block_ancillas, *system_qubits])))
+    return gates
+
+
+def adjoint_gate(
+    gate: QasmGate,
+    *,
+    signal_gate: str = "UH",
+    signal_gate_dagger: str = "UHdg",
+) -> QasmGate:
+    name = gate.name.lower()
+    if name in {"rz", "rx", "ry"}:
+        if gate.parameter is None:
+            raise ValueError(f"{gate.name} requires an angle")
+        return QasmGate(gate.name, gate.qubits, -gate.parameter)
+
+    if gate.name == signal_gate:
+        return QasmGate(signal_gate_dagger, gate.qubits)
+    if gate.name == signal_gate_dagger:
+        return QasmGate(signal_gate, gate.qubits)
+
+    if name == "s":
+        return QasmGate("sdg", gate.qubits)
+    if name == "sdg":
+        return QasmGate("s", gate.qubits)
+
+    if name in {"h", "x", "z", "cx", "cz", "mcx"}:
+        return gate
+
+    raise NotImplementedError(gate.name)
+
+
+def daggerize_gate_list(
+    gates: list[QasmGate],
+    *,
+    signal_gate: str = "UH",
+    signal_gate_dagger: str = "UHdg",
+) -> list[QasmGate]:
+    return [
+        adjoint_gate(gate, signal_gate=signal_gate, signal_gate_dagger=signal_gate_dagger)
+        for gate in reversed(gates)
+    ]
+
+
 def qasm_snippet(
     pyqsp_phases: list[float],
     qsvt_projector_phases: list[float],
@@ -153,33 +226,54 @@ def selector_qasm_snippet(
     system_qubits: list[str],
     signal_gate: str,
     signal_gate_dagger: str,
+    controlled_signal_gate: str = "cUH",
+    controlled_signal_gate_dagger: str = "cUHdg",
 ) -> str:
     block_ancillas = _normalize_qubit_list(block_ancillas, label="block ancilla")
     system_qubits = _normalize_qubit_list(system_qubits, label="system qubit")
+    raw_gates = build_raw_qsp_gate_list(
+        pyqsp_phases,
+        qsvt_projector_phases,
+        qasm_rz_angles,
+        phase_qubit=phase_qubit,
+        block_ancillas=block_ancillas,
+        system_qubits=system_qubits,
+        signal_gate=signal_gate,
+        signal_gate_dagger=signal_gate_dagger,
+    )
+    dagger_gates = daggerize_gate_list(raw_gates, signal_gate=signal_gate, signal_gate_dagger=signal_gate_dagger)
     lines: list[str] = []
     lines.append(f"h {selector_qubit};")
     lines.append("")
-    for idx, (phase, psi, theta) in enumerate(zip(pyqsp_phases, qsvt_projector_phases, qasm_rz_angles)):
-        lines.append(f"// phi_{idx} = {phase:.12g}")
-        lines.append(f"// psi_{idx} = {psi:.12g}")
-        lines.append(f"// solid-control theta_{idx} = {theta:.12g}")
-        lines.append(f"// open-control SELECT_RZ theta_{idx} = {-theta:.12g}")
-        lines.extend(_selector_phase_block(theta, selector_qubit, phase_qubit, block_ancillas))
-        if idx == len(pyqsp_phases) - 1:
-            continue
 
-        use_dagger = idx % 2 == 1
-        gate = signal_gate_dagger if use_dagger else signal_gate
-        label = "U^\\dagger" if use_dagger else "U"
-        lines.append("")
-        lines.append(f"// {label}")
-        lines.append(f"{gate} {_format_gate_operands([*block_ancillas, *system_qubits])};")
-        lines.append("")
-
+    lines.append("// C branch: selector = 0")
+    lines.extend(
+        _controlled_gate_list_lines(
+            raw_gates,
+            controls=[(selector_qubit, 0)],
+            signal_gate=signal_gate,
+            signal_gate_dagger=signal_gate_dagger,
+            controlled_signal_gate=controlled_signal_gate,
+            controlled_signal_gate_dagger=controlled_signal_gate_dagger,
+        )
+    )
     lines.append("")
+    lines.append("// Cdag branch: selector = 1")
+    lines.extend(
+        _controlled_gate_list_lines(
+            dagger_gates,
+            controls=[(selector_qubit, 1)],
+            signal_gate=signal_gate,
+            signal_gate_dagger=signal_gate_dagger,
+            controlled_signal_gate=controlled_signal_gate,
+            controlled_signal_gate_dagger=controlled_signal_gate_dagger,
+        )
+    )
+    lines.append("")
+
+    lines.append(f"z {selector_qubit};")
     lines.append(f"h {selector_qubit};")
-    lines.append(f"sdg {selector_qubit};")
-    lines.append(f"x {selector_qubit};")
+    lines.append(f"rz(3.14159265359) {selector_qubit};")
     return "\n".join(lines)
 
 
@@ -199,88 +293,65 @@ def full_hamsim_qasm_snippet(
 ) -> str:
     block_ancillas = _normalize_qubit_list(block_ancillas, label="block ancilla")
     system_qubits = _normalize_qubit_list(system_qubits, label="system qubit")
-    if len(block_ancillas) != 1:
-        raise ValueError("full Hamiltonian simulation common-skeleton QASM currently expects exactly one block ancilla")
-    if len(sin_record["qsvt_projector_phases"]) != len(cos_record["qsvt_projector_phases"]) + 1:
-        raise ValueError("full Hamiltonian simulation common skeleton expects sine degree to be cosine degree + 1")
 
-    block_ancilla = block_ancillas[0]
+    cos_raw = build_raw_qsp_gate_list(
+        cos_record["pyqsp_phases"],
+        cos_record["qsvt_projector_phases"],
+        cos_record["qasm_rz_angles"],
+        phase_qubit=phase_qubit,
+        block_ancillas=block_ancillas,
+        system_qubits=system_qubits,
+        signal_gate=signal_gate,
+        signal_gate_dagger=signal_gate_dagger,
+    )
+    sin_raw = build_raw_qsp_gate_list(
+        sin_record["pyqsp_phases"],
+        sin_record["qsvt_projector_phases"],
+        sin_record["qasm_rz_angles"],
+        phase_qubit=phase_qubit,
+        block_ancillas=block_ancillas,
+        system_qubits=system_qubits,
+        signal_gate=signal_gate,
+        signal_gate_dagger=signal_gate_dagger,
+    )
+    cos_dagger = daggerize_gate_list(cos_raw, signal_gate=signal_gate, signal_gate_dagger=signal_gate_dagger)
+    sin_dagger = daggerize_gate_list(sin_raw, signal_gate=signal_gate, signal_gate_dagger=signal_gate_dagger)
+
     lines: list[str] = []
     lines.append(f"h {selector_qubit};")
     lines.append(f"h {component_selector_qubit};")
     lines.append("")
 
-    cos_phases = cos_record["pyqsp_phases"]
-    cos_psis = cos_record["qsvt_projector_phases"]
-    sin_psis = sin_record["qsvt_projector_phases"]
-    sin_phases = sin_record["pyqsp_phases"]
-
-    for idx, (cos_phase, cos_psi, sin_phase, sin_psi) in enumerate(zip(cos_phases, cos_psis, sin_phases, sin_psis)):
-        delta = sin_psi - cos_psi
-        lines.append(f"// common phase {idx}")
-        lines.append(f"// cos phi_{idx} = {cos_phase:.12g}")
-        lines.append(f"// cos psi_{idx} = {cos_psi:.12g}")
-        lines.append(f"// sin phi_{idx} = {sin_phase:.12g}")
-        lines.append(f"// sin psi_{idx} = {sin_psi:.12g}")
-        lines.append(f"// Delta_{idx} = sin psi_{idx} - cos psi_{idx} = {delta:.12g}")
+    for label, gates, outer_value, component_value in (
+        ("cos C branch", cos_raw, 0, 0),
+        ("cos Cdag branch", cos_dagger, 0, 1),
+        ("sin C branch", sin_raw, 1, 0),
+        ("sin Cdag branch", sin_dagger, 1, 1),
+    ):
+        lines.append(f"// {label}: selector = {outer_value}, component selector = {component_value}")
         lines.extend(
-            _base_signed_phase(
-                cos_psi,
-                component_selector_qubit=component_selector_qubit,
-                phase_qubit=phase_qubit,
-                block_ancilla=block_ancilla,
+            _controlled_gate_list_lines(
+                gates,
+                controls=[(selector_qubit, outer_value), (component_selector_qubit, component_value)],
+                signal_gate=signal_gate,
+                signal_gate_dagger=signal_gate_dagger,
+                controlled_signal_gate=controlled_signal_gate,
+                controlled_signal_gate_dagger=controlled_signal_gate_dagger,
             )
         )
         lines.append("")
-        lines.append("// extra signed difference phase on sin branch only")
-        lines.extend(
-            _controlled_signed_phase(
-                delta,
-                selector_qubit=selector_qubit,
-                component_selector_qubit=component_selector_qubit,
-                phase_qubit=phase_qubit,
-                block_ancilla=block_ancilla,
-            )
-        )
-        if idx == len(cos_psis) - 1:
-            continue
 
-        use_dagger = idx % 2 == 1
-        gate = signal_gate_dagger if use_dagger else signal_gate
-        label = "common U^\\dagger" if use_dagger else "common U"
-        lines.append("")
-        lines.append(f"// {label}")
-        lines.append(f"{gate} {_format_gate_operands([*block_ancillas, *system_qubits])};")
-        lines.append("")
-
-    extra_idx = len(cos_psis) - 1
-    extra_gate = controlled_signal_gate_dagger if extra_idx % 2 == 1 else controlled_signal_gate
-    extra_label = "sin-only final U^\\dagger" if extra_idx % 2 == 1 else "sin-only final U"
-    lines.append("")
-    lines.append(f"// {extra_label}")
-    lines.append(f"{extra_gate} {_format_gate_operands([selector_qubit, *block_ancillas, *system_qubits])};")
-    lines.append("")
-    final_idx = len(sin_psis) - 1
-    lines.append(f"// final sin-only phase {final_idx}")
-    lines.append(f"// sin phi_{final_idx} = {sin_phases[final_idx]:.12g}")
-    lines.append(f"// sin psi_{final_idx} = {sin_psis[final_idx]:.12g}")
-    lines.extend(
-        _controlled_signed_phase(
-            sin_psis[final_idx],
-            selector_qubit=selector_qubit,
-            component_selector_qubit=component_selector_qubit,
-            phase_qubit=phase_qubit,
-            block_ancilla=block_ancilla,
-        )
-    )
-    lines.append("")
+    lines.append("// extract (C - Cdag)/(2i) on the component selector")
+    lines.append(f"z {component_selector_qubit};")
     lines.append(f"h {component_selector_qubit};")
-    component_phase_gate = _component_extraction_phase_gate(final_idx)
-    lines.append(f"{component_phase_gate} {component_selector_qubit};")
-    lines.append(f"x {component_selector_qubit};")
+    lines.append(f"rz(3.14159265359) {component_selector_qubit};")
     lines.append("")
+    lines.append("// combine 1/2 * (E_cos - i E_sin)")
     lines.append(f"sdg {selector_qubit};")
     lines.append(f"h {selector_qubit};")
+    sin_degree = int(sin_record.get("degree", len(sin_record["pyqsp_phases"]) - 1))
+    if _full_hamsim_needs_global_sign_flip(sin_degree):
+        lines.append(f"rz(6.28318530718) {selector_qubit};")
     return "\n".join(lines)
 
 
@@ -327,7 +398,24 @@ def full_hamsim_qasm_file(
     block_comment = "\n".join(f"// {qubit} = block-encoding ancilla[{index}]" for index, qubit in enumerate(block_ancillas))
     system_comment = "\n".join(f"// {qubit} = system qubit[{index}]" for index, qubit in enumerate(system_qubits))
     controlled_signature = _opaque_signature(["c", *[f"a{index}" for index in range(len(block_ancillas))]], [f"s{index}" for index in range(len(system_qubits))])
+    double_controlled_signature = _opaque_signature(["c0", "c1", *[f"a{index}" for index in range(len(block_ancillas))]], [f"s{index}" for index in range(len(system_qubits))])
     mcx_signature = _opaque_signature(["selector", *[f"c{index}" for index in range(len(block_ancillas))]], ["t"])
+    double_controlled_signal_gate = _controlled_signal_gate_name(
+        2,
+        dagger=False,
+        signal_gate=signal_gate,
+        signal_gate_dagger=signal_gate_dagger,
+        controlled_signal_gate=controlled_signal_gate,
+        controlled_signal_gate_dagger=controlled_signal_gate_dagger,
+    )
+    double_controlled_signal_gate_dagger = _controlled_signal_gate_name(
+        2,
+        dagger=True,
+        signal_gate=signal_gate,
+        signal_gate_dagger=signal_gate_dagger,
+        controlled_signal_gate=controlled_signal_gate,
+        controlled_signal_gate_dagger=controlled_signal_gate_dagger,
+    )
 
     return f"""OPENQASM 2.0;
 include "qelib1.inc";
@@ -336,6 +424,8 @@ opaque {signal_gate} {controlled_signature.removeprefix("c, ")};
 opaque {signal_gate_dagger} {controlled_signature.removeprefix("c, ")};
 opaque {controlled_signal_gate} {controlled_signature};
 opaque {controlled_signal_gate_dagger} {controlled_signature};
+opaque {double_controlled_signal_gate} {double_controlled_signature};
+opaque {double_controlled_signal_gate_dagger} {double_controlled_signature};
 opaque mcx {mcx_signature};
 
 qreg q[{qreg_size}];
@@ -347,11 +437,10 @@ qreg q[{qreg_size}];
 {system_comment}
 
 // Full Hamiltonian simulation QSP block generated by tools/hamsim_qsp.py.
-// The outer selector multiplexes the QSP phases: each common layer applies the
-// cosine signed phase, then selector |1> adds the sine-cosine phase difference.
-// The common U_H/U_Hdg skeleton is shared; only the sine branch has the final
-// extra U_H and phase. The component selector extracts pyqsp's imaginary
-// response before the outer sdg+h combines P_cos(H) - i P_sin(H).
+// The component selector extracts each raw pyqsp response as
+// (C - C^dagger)/(2i), using a true reverse-order adjoint branch. The outer
+// selector then combines the extracted components as
+// 1/2 * (P_cos(H) - i P_sin(H)).
 //
 // P_cos(x) = {cos_polynomial}
 // P_sin(x) = {sin_polynomial}
@@ -375,6 +464,8 @@ def selector_qasm_file(
     system_qubits: list[str],
     signal_gate: str,
     signal_gate_dagger: str,
+    controlled_signal_gate: str = "cUH",
+    controlled_signal_gate_dagger: str = "cUHdg",
 ) -> str:
     block_ancillas = _normalize_qubit_list(block_ancillas, label="block ancilla")
     system_qubits = _normalize_qubit_list(system_qubits, label="system qubit")
@@ -391,12 +482,15 @@ def selector_qasm_file(
         system_qubits=system_qubits,
         signal_gate=signal_gate,
         signal_gate_dagger=signal_gate_dagger,
+        controlled_signal_gate=controlled_signal_gate,
+        controlled_signal_gate_dagger=controlled_signal_gate_dagger,
     )
     phase_lines = "\n".join(f"//   phi_{idx} = {phase:.17g}" for idx, phase in enumerate(record["pyqsp_phases"]))
     theta_lines = "\n".join(f"//   theta_{idx} = {theta:.17g}" for idx, theta in enumerate(record["qasm_rz_angles"]))
     block_comment = "\n".join(f"// {qubit} = block-encoding ancilla[{index}]" for index, qubit in enumerate(block_ancillas))
     system_comment = "\n".join(f"// {qubit} = system qubit[{index}]" for index, qubit in enumerate(system_qubits))
     signal_signature = _opaque_signature([f"a{index}" for index in range(len(block_ancillas))], [f"s{index}" for index in range(len(system_qubits))])
+    controlled_signature = _opaque_signature(["c", *[f"a{index}" for index in range(len(block_ancillas))]], [f"s{index}" for index in range(len(system_qubits))])
     mcx_signature = _opaque_signature([f"c{index}" for index in range(len(block_ancillas))], ["t"])
 
     return f"""OPENQASM 2.0;
@@ -404,6 +498,8 @@ include "qelib1.inc";
 
 opaque {signal_gate} {signal_signature};
 opaque {signal_gate_dagger} {signal_signature};
+opaque {controlled_signal_gate} {controlled_signature};
+opaque {controlled_signal_gate_dagger} {controlled_signature};
 opaque mcx {mcx_signature};
 
 qreg q[{qreg_size}];
@@ -423,10 +519,9 @@ qreg q[{qreg_size}];
 //   scale = {record["scale"]}
 //
 // The base QSP component has Im B[00] = P_{component}(H). The selector wrapper
-// coherently runs theta and -theta branches, takes their difference, multiplies
-// by -i, and moves the result to the all-zero selector branch. Therefore the
-// final all-zero branch is directly P_{component}(H), so the verifier compares
-// the full polynomial.
+// runs C on selector |0> and the true adjoint C^dagger on selector |1>, then
+// extracts (C - C^dagger)/(2i). Therefore the final all-zero branch is directly
+// P_{component}(H), so the verifier compares the full polynomial.
 //
 // Open-control multi-controlled X gates on the block ancillas are expanded
 // with x gates around abstract mcx. This matches the paper convention that
@@ -528,6 +623,8 @@ def write_selector_examples(
     system_qubits: list[str],
     signal_gate: str,
     signal_gate_dagger: str,
+    controlled_signal_gate: str = "cUH",
+    controlled_signal_gate_dagger: str = "cUHdg",
 ) -> dict[str, Any]:
     if method != "sym_qsp" or signal_operator != "Wx":
         raise ValueError("--write-examples currently expects --method sym_qsp --signal-operator Wx")
@@ -555,7 +652,7 @@ def write_selector_examples(
     files: list[dict[str, Any]] = []
     for record in records:
         component = record["selector_component"]
-        filename = f"qsp_hamsim_{component}_selector_{tag}_deg{record['degree']}.qasm"
+        filename = f"qsp_hamsim_{component}_selector_{tag}{suffix}_deg{record['degree']}.qasm"
         qasm_path = output_dir / filename
         qasm_text = selector_qasm_file(
             record,
@@ -566,6 +663,8 @@ def write_selector_examples(
             system_qubits=system_qubits,
             signal_gate=signal_gate,
             signal_gate_dagger=signal_gate_dagger,
+            controlled_signal_gate=controlled_signal_gate,
+            controlled_signal_gate_dagger=controlled_signal_gate_dagger,
         )
         qasm_path.write_text(qasm_text, encoding="utf-8")
         polynomial = polynomial_expr(record["monomial_coefficients"], "x", precision)
@@ -592,6 +691,7 @@ def write_selector_examples(
         "tau": tau,
         "epsilon": epsilon,
         "ensure_bounded": ensure_bounded,
+        "assumption": "Hermitian base: selector wrappers use C^dagger from reverse-order adjoint gates, and Hd is rewritten to H for polynomial evaluation",
         "scale": records[0]["scale"],
         "selector_qubit": selector_qubit,
         "phase_qubit": phase_qubit,
@@ -669,6 +769,7 @@ def write_full_hamsim_example(
         "tau": tau,
         "epsilon": epsilon,
         "ensure_bounded": ensure_bounded,
+        "assumption": "Hermitian base: selector wrappers use C^dagger from reverse-order adjoint gates, and Hd is rewritten to H for polynomial evaluation",
         "scale": record["scale"],
         "selector_qubit": selector_qubit,
         "component_selector_qubit": component_selector_qubit,
@@ -941,6 +1042,134 @@ def _phase_block(angle: float, phase_qubit: str, block_ancillas: list[str]) -> l
     ]
 
 
+def _phase_block_gates(angle: float, phase_qubit: str, block_ancillas: list[str]) -> list[QasmGate]:
+    return [
+        *_open_mcx_block_gates(block_ancillas, phase_qubit),
+        QasmGate("rz", (phase_qubit,), angle),
+        *_open_mcx_block_gates(block_ancillas, phase_qubit),
+    ]
+
+
+def _controlled_gate_list_lines(
+    gates: list[QasmGate],
+    *,
+    controls: list[tuple[str, int]],
+    signal_gate: str,
+    signal_gate_dagger: str,
+    controlled_signal_gate: str,
+    controlled_signal_gate_dagger: str,
+) -> list[str]:
+    lines: list[str] = []
+    for gate in gates:
+        lines.extend(
+            _controlled_gate_lines(
+                gate,
+                controls=controls,
+                signal_gate=signal_gate,
+                signal_gate_dagger=signal_gate_dagger,
+                controlled_signal_gate=controlled_signal_gate,
+                controlled_signal_gate_dagger=controlled_signal_gate_dagger,
+            )
+        )
+    return lines
+
+
+def _controlled_gate_lines(
+    gate: QasmGate,
+    *,
+    controls: list[tuple[str, int]],
+    signal_gate: str,
+    signal_gate_dagger: str,
+    controlled_signal_gate: str,
+    controlled_signal_gate_dagger: str,
+) -> list[str]:
+    if not controls:
+        return [_format_qasm_gate(gate)]
+
+    name = gate.name.lower()
+    open_controls = [qubit for qubit, value in controls if value == 0]
+    solid_controls = [qubit for qubit, value in controls if value == 1]
+
+    if name in {"rz", "rx", "ry"}:
+        if name != "rz":
+            raise NotImplementedError(f"Controlled {gate.name} emission is not supported")
+        if gate.parameter is None:
+            raise ValueError("rz requires an angle")
+        return _multi_controlled_rz(gate.parameter, open_controls=open_controls, solid_controls=solid_controls, target=gate.qubits[0])
+
+    if name == "x":
+        target = gate.qubits[0]
+        return _controlled_x_lines(open_controls=open_controls, solid_controls=solid_controls, target=target)
+
+    if name == "cx":
+        target = gate.qubits[1]
+        return _controlled_x_lines(
+            open_controls=open_controls,
+            solid_controls=[*solid_controls, gate.qubits[0]],
+            target=target,
+        )
+
+    if name == "mcx":
+        target = gate.qubits[-1]
+        return _controlled_x_lines(
+            open_controls=open_controls,
+            solid_controls=[*solid_controls, *gate.qubits[:-1]],
+            target=target,
+        )
+
+    if gate.name in {signal_gate, signal_gate_dagger}:
+        dagger = gate.name == signal_gate_dagger
+        controlled_name = _controlled_signal_gate_name(
+            len(controls),
+            dagger=dagger,
+            signal_gate=signal_gate,
+            signal_gate_dagger=signal_gate_dagger,
+            controlled_signal_gate=controlled_signal_gate,
+            controlled_signal_gate_dagger=controlled_signal_gate_dagger,
+        )
+        line = f"{controlled_name} {_format_gate_operands([*solid_controls, *open_controls, *gate.qubits])};"
+        return [
+            *(f"x {control};" for control in open_controls),
+            line,
+            *(f"x {control};" for control in reversed(open_controls)),
+        ]
+
+    raise NotImplementedError(f"Controlled {gate.name} emission is not supported")
+
+
+def _controlled_x_lines(*, open_controls: list[str], solid_controls: list[str], target: str) -> list[str]:
+    controls = [*solid_controls, *open_controls]
+    if not controls:
+        return [f"x {target};"]
+    gate = "cx" if len(controls) == 1 else "mcx"
+    return [
+        *(f"x {control};" for control in open_controls),
+        f"{gate} {_format_gate_operands([*controls, target])};",
+        *(f"x {control};" for control in reversed(open_controls)),
+    ]
+
+
+def _controlled_signal_gate_name(
+    control_count: int,
+    *,
+    dagger: bool,
+    signal_gate: str,
+    signal_gate_dagger: str,
+    controlled_signal_gate: str,
+    controlled_signal_gate_dagger: str,
+) -> str:
+    if control_count == 1:
+        return controlled_signal_gate_dagger if dagger else controlled_signal_gate
+    base = signal_gate_dagger if dagger else signal_gate
+    return f"{'c' * control_count}{base}"
+
+
+def _format_qasm_gate(gate: QasmGate) -> str:
+    if gate.parameter is None:
+        return f"{gate.name} {_format_gate_operands(list(gate.qubits))};"
+    return f"{gate.name}({gate.parameter:.12g}) {_format_gate_operands(list(gate.qubits))};"
+
+
 def _base_signed_phase(
     psi: float,
     *,
@@ -1092,6 +1321,12 @@ def _component_extraction_phase_gate(sin_degree: int) -> str:
     return "s" if half_degree % 2 == 1 else "sdg"
 
 
+def _full_hamsim_needs_global_sign_flip(sin_degree: int) -> bool:
+    if sin_degree % 2 != 1:
+        raise ValueError("full Hamiltonian simulation expects the sine component to have odd degree")
+    return ((sin_degree - 1) // 2) % 2 == 1
+
+
 def _controlled_selector_phase_block(
     angle: float,
     *,
@@ -1185,12 +1420,24 @@ def _open_mcx_block(block_ancillas: list[str], phase_qubit: str) -> list[str]:
     return _open_mcx_controls(block_ancillas, [], phase_qubit)
 
 
+def _open_mcx_block_gates(block_ancillas: list[str], phase_qubit: str) -> list[QasmGate]:
+    return _open_mcx_controls_gates(block_ancillas, [], phase_qubit)
+
+
 def _open_mcx_controls(open_controls: list[str], solid_controls: list[str], target: str) -> list[str]:
     controls = ", ".join([*open_controls, *solid_controls, target])
     return [
         *(f"x {control};" for control in open_controls),
         f"mcx {controls};",
         *(f"x {control};" for control in reversed(open_controls)),
+    ]
+
+
+def _open_mcx_controls_gates(open_controls: list[str], solid_controls: list[str], target: str) -> list[QasmGate]:
+    return [
+        *(QasmGate("x", (control,)) for control in open_controls),
+        QasmGate("mcx", tuple([*open_controls, *solid_controls, target])),
+        *(QasmGate("x", (control,)) for control in reversed(open_controls)),
     ]
 
 

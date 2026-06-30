@@ -226,10 +226,12 @@ python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --write-examples \
   --system-qubits 'q[4]'
 ```
 
-The current multi-ancilla cos/sin verifier path assumes a real block encoding,
-so `U_H = U_H^*`. Gates that require complex conjugation behavior, such as
-system-level `Y`, `S`, or `Sdg` inside `U_H`, are intentionally out of scope for
-this checkpoint.
+The verifier treats `UHdg` as an adjoint block, not as elementwise complex
+conjugation. With `--hermitian-base`, word-mode normalization rewrites `Hd` to
+`H`, so polynomial evaluation only relies on `H^\dagger = H`; it does not
+require a real block encoding with `H^* = H`. The regression suite includes the
+minimal discriminator `H = Y`, where `Y^* = -Y` but `Y^\dagger = Y`, before also
+checking the mixed Hermitian base `(X + Y + Z)/3`.
 
 To generate the single selector-controlled Hamiltonian simulation block, use
 `--component full`. The first operand of `cUH`/`cUHdg` is the selector control;

@@ -167,6 +167,8 @@ def _print_qasm_snippet(record: dict[str, Any], qasm_args: argparse.Namespace) -
                 system_qubits=system_qubits,
                 signal_gate=qasm_args.signal_gate,
                 signal_gate_dagger=qasm_args.signal_gate_dagger,
+                controlled_signal_gate=qasm_args.controlled_signal_gate,
+                controlled_signal_gate_dagger=qasm_args.controlled_signal_gate_dagger,
             )
         )
         return
@@ -323,6 +325,8 @@ def main() -> int:
             system_qubits=system_qubits,
             signal_gate=args.signal_gate,
             signal_gate_dagger=args.signal_gate_dagger,
+            controlled_signal_gate=args.controlled_signal_gate,
+            controlled_signal_gate_dagger=args.controlled_signal_gate_dagger,
         )
         if args.format == "json":
             print(json.dumps(metadata, indent=2, sort_keys=True))

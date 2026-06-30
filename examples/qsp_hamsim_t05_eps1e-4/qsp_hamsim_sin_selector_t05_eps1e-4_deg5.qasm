@@ -3,6 +3,8 @@ include "qelib1.inc";
 
 opaque UH a0, s0;
 opaque UHdg a0, s0;
+opaque cUH c, a0, s0;
+opaque cUHdg c, a0, s0;
 opaque mcx c0, t;
 
 qreg q[4];
@@ -22,10 +24,9 @@ qreg q[4];
 //   scale = 0.5
 //
 // The base QSP component has Im B[00] = P_sin(H). The selector wrapper
-// coherently runs theta and -theta branches, takes their difference, multiplies
-// by -i, and moves the result to the all-zero selector branch. Therefore the
-// final all-zero branch is directly P_sin(H), so the verifier compares
-// the full polynomial.
+// runs C on selector |0> and the true adjoint C^dagger on selector |1>, then
+// extracts (C - C^dagger)/(2i). Therefore the final all-zero branch is directly
+// P_sin(H), so the verifier compares the full polynomial.
 //
 // Open-control multi-controlled X gates on the block ancillas are expanded
 // with x gates around abstract mcx. This matches the paper convention that
@@ -51,147 +52,246 @@ qreg q[4];
 
 h q[2];
 
-// phi_0 = 4.08768873095e-06
-// psi_0 = 0.785402251086
-// solid-control theta_0 = -1.57080450217
-// open-control SELECT_RZ theta_0 = 1.57080450217
-x q[1];
-mcx q[1], q[0];
-x q[1];
+// C branch: selector = 0
+x q[2];
+cx q[2], q[1];
+x q[2];
+x q[2];
+mcx q[1], q[2], q[0];
+x q[2];
+x q[2];
+cx q[2], q[1];
+x q[2];
+x q[2];
+mcx q[2], q[0];
+x q[2];
+rz(-0.785402251086) q[0];
+x q[2];
+mcx q[2], q[0];
 x q[2];
 rz(0.785402251086) q[0];
-cx q[2], q[0];
-rz(-0.785402251086) q[0];
-cx q[2], q[0];
 x q[2];
-rz(-0.785402251086) q[0];
-cx q[2], q[0];
+cx q[2], q[1];
+x q[2];
+x q[2];
+mcx q[1], q[2], q[0];
+x q[2];
+x q[2];
+cx q[2], q[1];
+x q[2];
+x q[2];
+cUH q[2], q[1], q[3];
+x q[2];
+x q[2];
+cx q[2], q[1];
+x q[2];
+x q[2];
+mcx q[1], q[2], q[0];
+x q[2];
+x q[2];
+cx q[2], q[1];
+x q[2];
+x q[2];
+mcx q[2], q[0];
+x q[2];
+rz(-1.5694951445) q[0];
+x q[2];
+mcx q[2], q[0];
+x q[2];
+rz(1.5694951445) q[0];
+x q[2];
+cx q[2], q[1];
+x q[2];
+x q[2];
+mcx q[1], q[2], q[0];
+x q[2];
+x q[2];
+cx q[2], q[1];
+x q[2];
+x q[2];
+cUHdg q[2], q[1], q[3];
+x q[2];
+x q[2];
+cx q[2], q[1];
+x q[2];
+x q[2];
+mcx q[1], q[2], q[0];
+x q[2];
+x q[2];
+cx q[2], q[1];
+x q[2];
+x q[2];
+mcx q[2], q[0];
+x q[2];
+rz(-1.69312841933) q[0];
+x q[2];
+mcx q[2], q[0];
+x q[2];
+rz(1.69312841933) q[0];
+x q[2];
+cx q[2], q[1];
+x q[2];
+x q[2];
+mcx q[1], q[2], q[0];
+x q[2];
+x q[2];
+cx q[2], q[1];
+x q[2];
+x q[2];
+cUH q[2], q[1], q[3];
+x q[2];
+x q[2];
+cx q[2], q[1];
+x q[2];
+x q[2];
+mcx q[1], q[2], q[0];
+x q[2];
+x q[2];
+cx q[2], q[1];
+x q[2];
+x q[2];
+mcx q[2], q[0];
+x q[2];
+rz(-1.69312841933) q[0];
+x q[2];
+mcx q[2], q[0];
+x q[2];
+rz(1.69312841933) q[0];
+x q[2];
+cx q[2], q[1];
+x q[2];
+x q[2];
+mcx q[1], q[2], q[0];
+x q[2];
+x q[2];
+cx q[2], q[1];
+x q[2];
+x q[2];
+cUHdg q[2], q[1], q[3];
+x q[2];
+x q[2];
+cx q[2], q[1];
+x q[2];
+x q[2];
+mcx q[1], q[2], q[0];
+x q[2];
+x q[2];
+cx q[2], q[1];
+x q[2];
+x q[2];
+mcx q[2], q[0];
+x q[2];
+rz(-1.5694951445) q[0];
+x q[2];
+mcx q[2], q[0];
+x q[2];
+rz(1.5694951445) q[0];
+x q[2];
+cx q[2], q[1];
+x q[2];
+x q[2];
+mcx q[1], q[2], q[0];
+x q[2];
+x q[2];
+cx q[2], q[1];
+x q[2];
+x q[2];
+cUH q[2], q[1], q[3];
+x q[2];
+x q[2];
+cx q[2], q[1];
+x q[2];
+x q[2];
+mcx q[1], q[2], q[0];
+x q[2];
+x q[2];
+cx q[2], q[1];
+x q[2];
+x q[2];
+mcx q[2], q[0];
+x q[2];
+rz(0.785394075709) q[0];
+x q[2];
+mcx q[2], q[0];
+x q[2];
+rz(-0.785394075709) q[0];
+x q[2];
+cx q[2], q[1];
+x q[2];
+x q[2];
+mcx q[1], q[2], q[0];
+x q[2];
+x q[2];
+cx q[2], q[1];
+x q[2];
+
+// Cdag branch: selector = 1
+cx q[2], q[1];
+mcx q[2], q[1], q[0];
+cx q[2], q[1];
+mcx q[2], q[0];
+rz(-0.785394075709) q[0];
+mcx q[2], q[0];
+rz(0.785394075709) q[0];
+cx q[2], q[1];
+mcx q[2], q[1], q[0];
+cx q[2], q[1];
+cUHdg q[2], q[1], q[3];
+cx q[2], q[1];
+mcx q[2], q[1], q[0];
+cx q[2], q[1];
+mcx q[2], q[0];
+rz(1.5694951445) q[0];
+mcx q[2], q[0];
+rz(-1.5694951445) q[0];
+cx q[2], q[1];
+mcx q[2], q[1], q[0];
+cx q[2], q[1];
+cUH q[2], q[1], q[3];
+cx q[2], q[1];
+mcx q[2], q[1], q[0];
+cx q[2], q[1];
+mcx q[2], q[0];
+rz(1.69312841933) q[0];
+mcx q[2], q[0];
+rz(-1.69312841933) q[0];
+cx q[2], q[1];
+mcx q[2], q[1], q[0];
+cx q[2], q[1];
+cUHdg q[2], q[1], q[3];
+cx q[2], q[1];
+mcx q[2], q[1], q[0];
+cx q[2], q[1];
+mcx q[2], q[0];
+rz(1.69312841933) q[0];
+mcx q[2], q[0];
+rz(-1.69312841933) q[0];
+cx q[2], q[1];
+mcx q[2], q[1], q[0];
+cx q[2], q[1];
+cUH q[2], q[1], q[3];
+cx q[2], q[1];
+mcx q[2], q[1], q[0];
+cx q[2], q[1];
+mcx q[2], q[0];
+rz(1.5694951445) q[0];
+mcx q[2], q[0];
+rz(-1.5694951445) q[0];
+cx q[2], q[1];
+mcx q[2], q[1], q[0];
+cx q[2], q[1];
+cUHdg q[2], q[1], q[3];
+cx q[2], q[1];
+mcx q[2], q[1], q[0];
+cx q[2], q[1];
+mcx q[2], q[0];
 rz(0.785402251086) q[0];
-cx q[2], q[0];
-x q[1];
-mcx q[1], q[0];
-x q[1];
+mcx q[2], q[0];
+rz(-0.785402251086) q[0];
+cx q[2], q[1];
+mcx q[2], q[1], q[0];
+cx q[2], q[1];
 
-// U
-UH q[1], q[3];
-
-// phi_1 = -0.00130118229871
-// psi_1 = 1.5694951445
-// solid-control theta_1 = -3.13899028899
-// open-control SELECT_RZ theta_1 = 3.13899028899
-x q[1];
-mcx q[1], q[0];
-x q[1];
-x q[2];
-rz(1.5694951445) q[0];
-cx q[2], q[0];
-rz(-1.5694951445) q[0];
-cx q[2], q[0];
-x q[2];
-rz(-1.5694951445) q[0];
-cx q[2], q[0];
-rz(1.5694951445) q[0];
-cx q[2], q[0];
-x q[1];
-mcx q[1], q[0];
-x q[1];
-
-// U^\dagger
-UHdg q[1], q[3];
-
-// phi_2 = 0.122332092537
-// psi_2 = 1.69312841933
-// solid-control theta_2 = -3.38625683866
-// open-control SELECT_RZ theta_2 = 3.38625683866
-x q[1];
-mcx q[1], q[0];
-x q[1];
-x q[2];
-rz(1.69312841933) q[0];
-cx q[2], q[0];
-rz(-1.69312841933) q[0];
-cx q[2], q[0];
-x q[2];
-rz(-1.69312841933) q[0];
-cx q[2], q[0];
-rz(1.69312841933) q[0];
-cx q[2], q[0];
-x q[1];
-mcx q[1], q[0];
-x q[1];
-
-// U
-UH q[1], q[3];
-
-// phi_3 = 0.122332092537
-// psi_3 = 1.69312841933
-// solid-control theta_3 = -3.38625683866
-// open-control SELECT_RZ theta_3 = 3.38625683866
-x q[1];
-mcx q[1], q[0];
-x q[1];
-x q[2];
-rz(1.69312841933) q[0];
-cx q[2], q[0];
-rz(-1.69312841933) q[0];
-cx q[2], q[0];
-x q[2];
-rz(-1.69312841933) q[0];
-cx q[2], q[0];
-rz(1.69312841933) q[0];
-cx q[2], q[0];
-x q[1];
-mcx q[1], q[0];
-x q[1];
-
-// U^\dagger
-UHdg q[1], q[3];
-
-// phi_4 = -0.00130118229871
-// psi_4 = 1.5694951445
-// solid-control theta_4 = -3.13899028899
-// open-control SELECT_RZ theta_4 = 3.13899028899
-x q[1];
-mcx q[1], q[0];
-x q[1];
-x q[2];
-rz(1.5694951445) q[0];
-cx q[2], q[0];
-rz(-1.5694951445) q[0];
-cx q[2], q[0];
-x q[2];
-rz(-1.5694951445) q[0];
-cx q[2], q[0];
-rz(1.5694951445) q[0];
-cx q[2], q[0];
-x q[1];
-mcx q[1], q[0];
-x q[1];
-
-// U
-UH q[1], q[3];
-
-// phi_5 = 4.08768873095e-06
-// psi_5 = -0.785394075709
-// solid-control theta_5 = 1.57078815142
-// open-control SELECT_RZ theta_5 = -1.57078815142
-x q[1];
-mcx q[1], q[0];
-x q[1];
-x q[2];
-rz(-0.785394075709) q[0];
-cx q[2], q[0];
-rz(0.785394075709) q[0];
-cx q[2], q[0];
-x q[2];
-rz(0.785394075709) q[0];
-cx q[2], q[0];
-rz(-0.785394075709) q[0];
-cx q[2], q[0];
-x q[1];
-mcx q[1], q[0];
-x q[1];
-
+z q[2];
 h q[2];
-sdg q[2];
-x q[2];
+rz(3.14159265359) q[2];

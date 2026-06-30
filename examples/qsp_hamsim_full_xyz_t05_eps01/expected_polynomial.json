@@ -1,5 +1,7 @@
 {
-  "assumption": "Hermitian base: selector wrappers use C^dagger from reverse-order adjoint gates, and Hd is rewritten to H for polynomial evaluation",
+  "assumption": "Hermitian base H = (X + Y + Z)/3; selector wrappers use C^dagger from reverse-order adjoint gates, and Hd is rewritten to H for polynomial evaluation",
+  "base": "(X + Y + Z)/3",
+  "base_description": "H = (X + Y + Z)/3",
   "block_ancillas": [
     "q[3]"
   ],
@@ -8,9 +10,10 @@
   "degree": 3,
   "ensure_bounded": true,
   "epsilon": 0.1,
+  "expected_operator": "0.23971812238665034733*I - 0.041090223499864326889*i*X - 0.041090223499864326889*i*Y - 0.041090223499864326889*i*Z",
   "phase_qubit": "q[2]",
   "polynomial": "0.24991946353954456 - 0.12497982382931781*i*x - 0.030604023458682638*x^2 + 0.005127459989174488*i*x^3",
-  "qasm": "examples/qsp_hamsim_full_t05_eps01/qsp_hamsim_full_t05_eps01_deg3.qasm",
+  "qasm": "examples/qsp_hamsim_full_xyz_t05_eps01/qsp_hamsim_full_xyz_t05_eps01_deg3.qasm",
   "scale": 0.5,
   "selector_qubit": "q[0]",
   "system_qubits": [
@@ -21,7 +24,7 @@
     ".venv/bin/python",
     "-m",
     "symbolic.verify",
-    "examples/qsp_hamsim_full_t05_eps01/qsp_hamsim_full_t05_eps01_deg3.qasm",
+    "examples/qsp_hamsim_full_xyz_t05_eps01/qsp_hamsim_full_xyz_t05_eps01_deg3.qasm",
     "--ancillas",
     "q[0]",
     "q[1]",
@@ -29,9 +32,11 @@
     "q[3]",
     "--systems",
     "q[4]",
+    "--base",
+    "(X + Y + Z)/3",
     "--expected-polynomial",
     "0.24991946353954456 - 0.12497982382931781*i*x - 0.030604023458682638*x^2 + 0.005127459989174488*i*x^3",
     "--hermitian-base",
-    "--compare-polynomial-only"
+    "--result-only"
   ]
 }
