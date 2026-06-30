@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3 
 """Generate pyqsp Hamiltonian-simulation polynomials and QSP phases.
 
 Examples:

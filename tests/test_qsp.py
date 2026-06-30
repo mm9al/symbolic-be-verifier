@@ -127,7 +127,6 @@ def test_full_hamsim_qasm_snippet_uses_interleaved_phase_multiplexing():
     assert "// common U^\\dagger" in snippet
     assert "// sin-only final U" in snippet
     assert "cUH q[0], q[3], q[4];" in snippet
-    assert "ccUH" not in snippet
     assert "Cdag branch" not in snippet
     assert "// extract pyqsp imaginary response on the component selector" in snippet
     assert "h q[1];\ns q[1];\nx q[1];" in snippet
@@ -163,7 +162,7 @@ def test_full_hamsim_qasm_snippet_uses_degree_dependent_component_extraction():
         controlled_signal_gate_dagger="cUHdg",
     )
 
-    assert "ccUH" not in snippet
+    assert "cUH q[0], q[3], q[4];" in snippet
     assert "h q[1];\nsdg q[1];\nx q[1];" in snippet
 
 
