@@ -4,6 +4,7 @@ include "qelib1.inc";
 qreg q[2];
 
 // PREPARE
+x q[0];
 h q[0];
 
 // SELECT X

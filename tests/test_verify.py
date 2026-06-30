@@ -30,13 +30,13 @@ def test_h_on_ancilla_update():
     assert state.b1.equals(expected)
 
 
-def test_lcu_x_plus_z_example_verifies():
-    path = Path(__file__).parents[1] / "examples" / "lcu_x_plus_z.qasm"
-    result = verify_qasm_file(path, expected="(X + Z)/2", keep_trace=True)
+def test_lcu_x_minus_z_example_verifies():
+    path = Path(__file__).parents[1] / "examples" / "lcu_x_minus_z.qasm"
+    result = verify_qasm_file(path, expected="(X - Z)/2", keep_trace=True)
 
     assert result.success is True
     assert result.status == PASS
-    assert result.final_state.b0.equals((pauli("X") + pauli("Z")).scale(sp.Rational(1, 2)))
+    assert result.final_state.b0.equals((pauli("X") - pauli("Z")).scale(sp.Rational(1, 2)))
     assert len(result.trace) == len(parse_qasm_file(path)) + 1
 
 
@@ -56,13 +56,13 @@ def test_lcu_xx_plus_zz_example_verifies():
 
 
 def test_trace_output_can_show_steps():
-    path = Path(__file__).parents[1] / "examples" / "lcu_x_plus_z.qasm"
-    result = verify_qasm_file(path, expected="(X + Z)/2", keep_trace=True)
+    path = Path(__file__).parents[1] / "examples" / "lcu_x_minus_z.qasm"
+    result = verify_qasm_file(path, expected="(X - Z)/2", keep_trace=True)
     output = format_result(result, show_trace=True)
 
     assert "Initial" in output
     assert "h q[0]" in output
-    assert "Final B0 = (X + Z)/2" in output
+    assert "Final B0 = X/2 - Z/2" in output
     assert "PASS" in output
 
 
@@ -294,7 +294,7 @@ def test_uhdg_uh_opaque_reduces_to_identity():
         path,
         ancillas=(0, 1),
         systems=(2,),
-        base="(X + Z)/2",
+        base="(X - Z)/2",
         expected_polynomial="1",
     )
 
@@ -366,13 +366,13 @@ def test_qsp_t3_opaque_verifies_chebyshev_polynomial_on_hermitian_base():
         path,
         ancillas=(0, 1),
         systems=(2,),
-        base="(X + Z)/2",
+        base="(X - Z)/2",
         expected_polynomial="4*x^3 - 3*x",
         hermitian_base=True,
         keep_trace=True,
     )
 
-    expected_operator = (pauli("X") + pauli("Z")).scale(sp.Rational(-1, 2))
+    expected_operator = (pauli("X") - pauli("Z")).scale(sp.Rational(-1, 2))
     expected_polynomial = 4 * sp.Symbol("x") ** 3 - 3 * sp.Symbol("x")
 
     assert result.success is True

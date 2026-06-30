@@ -40,7 +40,7 @@ Rotation gates support symbolic and exact angles such as `theta`, `-theta`,
 Print only the final symbolic branches:
 
 ```bash
-.venv/bin/python -m symbolic.verify examples/lcu_x_plus_z.qasm --expected "(X + Z)/2"
+.venv/bin/python -m symbolic.verify examples/lcu_x_minus_z.qasm --expected "(X - Z)/2"
 ```
 
 For multiple ancilla and system qubits, pass QASM indices in the order they
@@ -85,7 +85,7 @@ Rotation-gate example with a symbolic angle:
 Print every intermediate update:
 
 ```bash
-.venv/bin/python -m symbolic.verify examples/lcu_x_plus_z.qasm --expected "(X + Z)/2" --trace
+.venv/bin/python -m symbolic.verify examples/lcu_x_minus_z.qasm --expected "(X - Z)/2" --trace
 ```
 
 For multi-ancilla circuits, trace output is sparse and branch-oriented:
@@ -142,7 +142,7 @@ Ordinary QSP verification example:
 .venv/bin/python -m symbolic.verify examples/qsp_t3_opaque.qasm \
   --ancillas 'q[0]' 'q[1]' \
   --systems 'q[2]' \
-  --base '(X + Z)/2' \
+  --base '(X - Z)/2' \
   --expected-polynomial '4*x^3 - 3*x' \
   --hermitian-base \
   --result-only
@@ -172,10 +172,10 @@ wrapper around that module. Synthesis needs pyqsp's scientific Python
 dependencies (`numpy`, `scipy`, `matplotlib`), so run it with an environment
 that has pyqsp available, not the minimal verifier `.venv`.
 
-Generate a full Hamiltonian-simulation QASM block:
+Generate a full Hamiltonian-simulation QASM file and metadata:
 
 ```bash
-python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --component full --qasm-snippet \
+python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --component full --write-examples \
   --selector-qubit 'q[0]' \
   --component-selector-qubit 'q[1]' \
   --phase-qubit 'q[2]' \
@@ -183,11 +183,28 @@ python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --component full --qasm-sni
   --system-qubit 'q[4]'
 ```
 
+This writes:
+
+```text
+examples/qsp_hamsim_full_t05_eps1e-4/
+  qsp_hamsim_full_t05_eps1e-4_deg5.qasm
+  expected_polynomial.json
+```
+
 The full block shares the cosine/sine QSP signal skeleton and multiplexes the
-signed phase gadgets. The all-zero selector branch is:
+signed phase gadgets. Relative to the generated component polynomials, the
+all-zero selector branch is:
 
 ```text
 1/2 * (P_cos(H) - i P_sin(H))
+```
+
+For the checked-in pyqsp Hamiltonian-simulation examples, `P_cos` and `P_sin`
+are already half-scaled. Therefore the final expected polynomial is
+approximately:
+
+```text
+1/4 * exp(-i H tau)
 ```
 
 The checked-in degree-3 full Hamiltonian simulation fixture uses:
@@ -207,9 +224,9 @@ Verify the degree-3 fixture with:
   examples/qsp_hamsim_full_t05_eps01/qsp_hamsim_full_t05_eps01_deg3.qasm \
   --ancillas 'q[0]' 'q[1]' 'q[2]' 'q[3]' \
   --systems 'q[4]' \
+  --base '(X - Z)/2' \
   --expected-polynomial '0.24991946353954456 - 0.12497982382931781*i*x - 0.030604023458682638*x^2 + 0.005127459989174488*i*x^3' \
   --hermitian-base \
-  --compare-polynomial-only \
   --result-only
 ```
 
@@ -220,9 +237,9 @@ Verify the degree-5 fixture with:
   examples/qsp_hamsim_full_t05_eps1e-4/qsp_hamsim_full_t05_eps1e-4_deg5.qasm \
   --ancillas 'q[0]' 'q[1]' 'q[2]' 'q[3]' \
   --systems 'q[4]' \
+  --base '(X - Z)/2' \
   --expected-polynomial '0.24999983177772669 - 0.12499995789742122*i*x - 0.031246969364139787*x^2 + 0.0052079962615880623*i*x^3 + 0.00064294590545715025*x^4 - 6.4429017930859816e-05*i*x^5' \
   --hermitian-base \
-  --compare-polynomial-only \
   --result-only
 ```
 
@@ -234,9 +251,9 @@ time .venv/bin/python -m symbolic.verify \
   examples/qsp_hamsim_full_t05_eps01/qsp_hamsim_full_t05_eps01_deg3.qasm \
   --ancillas 'q[0]' 'q[1]' 'q[2]' 'q[3]' \
   --systems 'q[4]' \
+  --base '(X - Z)/2' \
   --expected-polynomial '0.24991946353954456 - 0.12497982382931781*i*x - 0.030604023458682638*x^2 + 0.005127459989174488*i*x^3' \
   --hermitian-base \
-  --compare-polynomial-only \
   --result-only
 ```
 
