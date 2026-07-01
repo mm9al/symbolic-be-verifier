@@ -8,13 +8,14 @@ from symbolic.expr import parse_operator_expression, pauli
 from symbolic.qasm_parser import parse_qasm_file, parse_qasm_text
 from symbolic.verify import (
     FAIL,
+    FAIL_GARBAGE,
     PASS,
-    PASS_UP_TO_GLOBAL_PHASE,
+    PASS_UP_TO_SCALE,
     VerificationResult,
     format_result,
     pauli_expr_close,
     polynomial_close,
-    proportional_phase,
+    proportional_scale,
     scalar_close,
     verify_qasm_file,
 )
@@ -140,42 +141,42 @@ def test_system_s_uses_multi_system_index_mapping():
     assert str(state.b0) == "(1/2 + i/2)*I + (1/2 - i/2)*Z_1"
 
 
-def test_proportional_phase_detects_unit_global_phase():
+def test_proportional_scale_detects_unit_global_phase():
     expected = (pauli("X") + pauli("Z")).scale(sp.Rational(1, 2))
-    phase = (-1 - sp.I) / sp.sqrt(2)
-    actual = expected.scale(phase)
+    scale = (-1 - sp.I) / sp.sqrt(2)
+    actual = expected.scale(scale)
 
-    ok, found_phase = proportional_phase(actual, expected)
+    ok, found_scale = proportional_scale(actual, expected)
 
     assert ok is True
-    assert sp.simplify(found_phase - phase) == 0
+    assert sp.simplify(found_scale - scale) == 0
 
 
-def test_verification_status_pass_up_to_global_phase():
+def test_verification_status_pass_up_to_scale_for_unit_global_phase():
     expected = (pauli("X") + pauli("Z")).scale(sp.Rational(1, 2))
-    phase = (-1 - sp.I) / sp.sqrt(2)
-    actual = expected.scale(phase)
+    scale = (-1 - sp.I) / sp.sqrt(2)
+    actual = expected.scale(scale)
     result = VerificationResult(final_state=BranchState(1, 1, {(0,): actual}), trace=[], expected=expected)
     output = format_result(result)
 
     assert result.success is True
-    assert result.status == PASS_UP_TO_GLOBAL_PHASE
-    assert sp.simplify(result.global_phase - phase) == 0
-    assert "PASS_UP_TO_GLOBAL_PHASE" in output
-    assert "phase = sqrt(2)*(-1 - i)/2" in output
+    assert result.status == PASS_UP_TO_SCALE
+    assert sp.simplify(result.scale - scale) == 0
+    assert "PASS_UP_TO_SCALE" in output
+    assert "scale = sqrt(2)*(-1 - i)/2" in output
 
 
-def test_proportional_but_non_unit_scale_fails():
+def test_proportional_non_unit_scale_passes():
     expected = pauli("X") + pauli("Z")
     actual = expected.scale(2)
     result = VerificationResult(final_state=BranchState(1, 1, {(0,): actual}), trace=[], expected=expected)
 
-    ok, phase = proportional_phase(actual, expected)
+    ok, scale = proportional_scale(actual, expected)
 
-    assert ok is False
-    assert phase == 2
-    assert result.success is False
-    assert result.status == FAIL
+    assert ok is True
+    assert scale == 2
+    assert result.success is True
+    assert result.status == PASS_UP_TO_SCALE
 
 
 def test_numeric_tolerance_accepts_exponential_and_decimal_coefficients():
@@ -302,6 +303,40 @@ def test_uhdg_uh_opaque_reduces_to_identity():
     assert result.status == PASS
     assert result.qsp_normalized == WordExpr.identity()
     assert result.qsp_polynomial == 1
+
+
+def test_qsp_polynomial_check_requires_hermitian_base_to_rewrite_hdg(tmp_path):
+    path = tmp_path / "uhdg_only.qasm"
+    path.write_text(
+        """
+        OPENQASM 2.0;
+        opaque UHdg a, s;
+        qreg q[2];
+        UHdg q[0], q[1];
+        """,
+        encoding="utf-8",
+    )
+
+    result = verify_qasm_file(
+        path,
+        ancillas=(0,),
+        systems=(1,),
+        expected_polynomial="x",
+        compare_polynomial_only=True,
+    )
+    hermitian_result = verify_qasm_file(
+        path,
+        ancillas=(0,),
+        systems=(1,),
+        expected_polynomial="x",
+        hermitian_base=True,
+        compare_polynomial_only=True,
+    )
+
+    assert result.status == FAIL_GARBAGE
+    assert result.qsp_normalized == word_atom("Hd")
+    assert hermitian_result.status == PASS
+    assert hermitian_result.qsp_normalized == word_atom("H")
 
 
 def test_controlled_uh_only_updates_selected_selector_branch():

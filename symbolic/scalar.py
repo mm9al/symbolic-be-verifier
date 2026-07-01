@@ -37,6 +37,7 @@ def scalar_simplify(expr: sp.Expr) -> sp.Expr:
 def _scalar_simplify_cached(expr: sp.Expr) -> sp.Expr:
     simplified = sp.cancel(expr)
     simplified = sp.expand_mul(simplified)
+    simplified = sp.simplify(simplified)
     simplified = _rewrite_unit_trig_squares(simplified)
     simplified = sp.collect(simplified, sp.I, evaluate=True)
     return simplified

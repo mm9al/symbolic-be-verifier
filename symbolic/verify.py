@@ -16,7 +16,7 @@ from .word_expr import GARBAGE_ATOMS, WordExpr, eliminate
 
 
 PASS = "PASS"
-PASS_UP_TO_GLOBAL_PHASE = "PASS_UP_TO_GLOBAL_PHASE"
+PASS_UP_TO_SCALE = "PASS_UP_TO_SCALE"
 FAIL = "FAIL"
 FAIL_GARBAGE = "FAIL_GARBAGE"
 DEFAULT_TOLERANCE = 1e-8
@@ -51,7 +51,7 @@ class VerificationResult:
             return self.qsp_status == PASS
         if self.expected is None:
             return None
-        return self.status in {PASS, PASS_UP_TO_GLOBAL_PHASE}
+        return self.status in {PASS, PASS_UP_TO_SCALE}
 
     @property
     def status(self) -> Optional[str]:
@@ -64,19 +64,19 @@ class VerificationResult:
             return FAIL
         if pauli_expr_close(top_left, self.expected, tol=self.tolerance):
             return PASS
-        is_proportional, phase = proportional_phase(top_left, self.expected)
+        is_proportional, _scale = proportional_scale(top_left, self.expected, tol=self.tolerance)
         if is_proportional:
-            return PASS_UP_TO_GLOBAL_PHASE
+            return PASS_UP_TO_SCALE
         return FAIL
 
     @property
-    def global_phase(self) -> Optional[sp.Expr]:
+    def scale(self) -> Optional[sp.Expr]:
         top_left = self.final_state.top_left()
         if self.expected is None or not isinstance(top_left, OpExpr) or pauli_expr_close(top_left, self.expected, tol=self.tolerance):
             return None
-        is_proportional, phase = proportional_phase(top_left, self.expected)
+        is_proportional, scale = proportional_scale(top_left, self.expected, tol=self.tolerance)
         if is_proportional:
-            return phase
+            return scale
         return None
 
 
@@ -159,14 +159,10 @@ def verify_qasm_file(
             raise ValueError("--base is required when --expected-polynomial is set")
         if qsp_normalized is None:
             raise ValueError("--expected-polynomial requires QSP word-mode branch values")
-        if qsp_normalized.has_any_atom(GARBAGE_ATOMS):
+        if not is_h_polynomial_word(qsp_normalized):
             qsp_status = FAIL_GARBAGE
         else:
-            qsp_polynomial = (
-                convert_hermitian_word_to_polynomial(top_left)
-                if hermitian_base
-                else convert_h_word_to_polynomial(qsp_normalized)
-            )
+            qsp_polynomial = convert_h_word_to_polynomial(qsp_normalized)
             qsp_expected_polynomial = parse_polynomial(expected_polynomial)
             if compare_polynomial_only:
                 qsp_status = PASS if polynomial_close(qsp_polynomial, qsp_expected_polynomial, tol=tolerance) else FAIL
@@ -215,9 +211,9 @@ def format_result(result: VerificationResult, *, show_trace: bool = False) -> st
         lines.append(f"{expected_label} = {result.expected}")
         if result.status == PASS:
             lines.append(PASS)
-        elif result.status == PASS_UP_TO_GLOBAL_PHASE:
-            lines.append(PASS_UP_TO_GLOBAL_PHASE)
-            lines.append(f"phase = {_format_scalar(result.global_phase)}")
+        elif result.status == PASS_UP_TO_SCALE:
+            lines.append(PASS_UP_TO_SCALE)
+            lines.append(f"scale = {_format_scalar(result.scale)}")
         else:
             diff = result.final_state.top_left() - result.expected
             lines.append(FAIL)
@@ -290,7 +286,7 @@ def pauli_expr_close(actual: OpExpr, expected: OpExpr, *, tol: float = DEFAULT_T
 
 def polynomial_close(actual: sp.Expr, expected: sp.Expr, *, tol: float = DEFAULT_TOLERANCE) -> bool:
     x = sp.Symbol("x")
-    diff = scalar_simplify(sp.expand(parse_polynomial(actual) - parse_polynomial(expected)))
+    diff = sp.expand(parse_polynomial(actual) - parse_polynomial(expected))
     if diff == 0:
         return True
     poly = sp.Poly(diff, x)
@@ -311,34 +307,11 @@ def convert_h_word_to_polynomial(expr: WordExpr) -> sp.Expr:
         if any(atom != "H" for atom in word):
             raise ValueError(f"Cannot convert non-H word to polynomial: {word!r}")
         polynomial += coeff * x ** len(word)
-    return scalar_simplify(sp.expand(polynomial))
+    return sp.expand(polynomial)
 
 
-def convert_hermitian_word_to_polynomial(expr: WordExpr) -> sp.Expr:
-    x = sp.Symbol("x")
-    s = sp.Symbol("_qsp_s")
-    atom_values = {
-        "H": x,
-        "Hd": x,
-        "G": s,
-        "Gd": s,
-        "A": s,
-        "Ad": s,
-        "C": -x,
-        "Cd": -x,
-    }
-    value = sp.Integer(0)
-    for word, coeff in expr.terms.items():
-        term = coeff
-        for atom in word:
-            term *= atom_values[atom]
-        value += term
-
-    reduced = sp.Poly(sp.expand(value), s).rem(sp.Poly(s**2 - (1 - x**2), s)).as_expr()
-    reduced = scalar_simplify(sp.expand(reduced))
-    if s in reduced.free_symbols:
-        raise ValueError(f"Cannot convert Hermitian word expression with uncancelled block-complement terms: {expr!r}")
-    return reduced
+def is_h_polynomial_word(expr: WordExpr) -> bool:
+    return not expr.has_any_atom(GARBAGE_ATOMS | {"Hd"})
 
 
 def parse_polynomial(polynomial: str | sp.Expr) -> sp.Expr:
@@ -348,7 +321,7 @@ def parse_polynomial(polynomial: str | sp.Expr) -> sp.Expr:
         parsed = sp.sympify(text, locals={"x": x, "pi": sp.pi, "I": sp.I, "i": sp.I})
     else:
         parsed = sp.sympify(polynomial)
-    return scalar_simplify(sp.expand(parsed))
+    return sp.expand(parsed)
 
 
 def eval_polynomial_on_pauliop(polynomial: str | sp.Expr, base: OpExpr) -> OpExpr:
@@ -396,27 +369,24 @@ def _format_key(key: Tuple[int, ...]) -> str:
     return "".join(str(bit) for bit in key)
 
 
-def proportional_phase(actual: OpExpr, expected: OpExpr) -> Tuple[bool, Optional[sp.Expr]]:
+def proportional_scale(actual: OpExpr, expected: OpExpr, *, tol: float = DEFAULT_TOLERANCE) -> Tuple[bool, Optional[sp.Expr]]:
     actual, expected = _align_operator_qubits(actual, expected)
     actual_terms = _nonzero_terms(actual)
     expected_terms = _nonzero_terms(expected)
 
-    if set(actual_terms) != set(expected_terms):
-        return False, None
     if not expected_terms:
         return False, None
 
     p0 = next(iter(expected_terms))
-    phase = scalar_simplify(actual_terms[p0] / expected_terms[p0])
+    scale = scalar_simplify(actual_terms.get(p0, sp.Integer(0)) / expected_terms[p0])
 
-    for pauli_string, expected_coeff in expected_terms.items():
-        if scalar_simplify(actual_terms[pauli_string] - phase * expected_coeff) != 0:
+    for pauli_string in set(actual_terms) | set(expected_terms):
+        actual_coeff = actual_terms.get(pauli_string, sp.Integer(0))
+        expected_coeff = expected_terms.get(pauli_string, sp.Integer(0))
+        if not scalar_close(actual_coeff, scale * expected_coeff, tol=tol):
             return False, None
 
-    if scalar_simplify(phase * sp.conjugate(phase) - 1) != 0:
-        return False, phase
-
-    return True, phase
+    return True, scale
 
 
 def _align_operator_qubits(actual: OpExpr, expected: OpExpr) -> Tuple[OpExpr, OpExpr]:

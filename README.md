@@ -107,8 +107,8 @@ and verifies the final all-zero branch against the expected top-left block.
 Verification results:
 
 - `PASS`: final all-zero branch exactly equals the expected operator.
-- `PASS_UP_TO_GLOBAL_PHASE`: final all-zero branch is `phase * expected` and `|phase| = 1`.
-- `FAIL`: final all-zero branch is neither exactly equal nor equal up to a global phase.
+- `PASS_UP_TO_SCALE`: final all-zero branch is `scale * expected` for a scalar `scale`.
+- `FAIL`: final all-zero branch is neither exactly equal nor equal up to a scalar.
 
 ## QSP Verification
 
@@ -136,6 +136,13 @@ theta_rz = -2 * psi
 Use `--compare-polynomial-only` to compare polynomial coefficients directly
 instead of evaluating the polynomial on `--base`.
 
+For QSP polynomial checks, the verifier first normalizes the all-zero branch
+with the oriented block-unitarity rewrite rules. With `--hermitian-base`, it
+also rewrites `Hd` to `H`. The normalized expression must then be a polynomial
+in `H` only, i.e. a linear combination of `I`, `H`, `H H`, `H H H`, and so on.
+If any `A`, `G`, `C`, adjoint garbage block, or unreduced `Hd` remains, the
+check fails before comparing coefficients with the target polynomial.
+
 Ordinary QSP verification example:
 
 ```bash
@@ -162,8 +169,8 @@ Polynomial-only check:
 
 The verifier treats `UHdg` as an adjoint block, not as elementwise complex
 conjugation. With `--hermitian-base`, word-mode normalization rewrites `Hd` to
-`H`, so polynomial evaluation only relies on `H^\dagger = H`; it does not
-require a real block encoding with `H^* = H`.
+`H`, so the final syntactic polynomial check only relies on `H^\dagger = H`; it
+does not require a real block encoding with `H^* = H`.
 
 ## Hamiltonian Simulation Verification
 
