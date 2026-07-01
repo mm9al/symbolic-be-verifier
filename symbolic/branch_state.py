@@ -112,9 +112,10 @@ class BranchState:
         systems: Optional[Sequence[int]] = None,
     ) -> "BranchState":
         name = gate.name.lower()
-        if gate.parameter is not None and name not in {"rx", "ry", "rz"}:
+        parameterized_gates = {"rx", "ry", "rz"}
+        if gate.parameter is not None and name not in parameterized_gates:
             raise UnsupportedGateError(f"Parameterized gate is not supported yet: {gate}")
-        if gate.parameter is None and name in {"rx", "ry", "rz"}:
+        if gate.parameter is None and name in parameterized_gates:
             raise UnsupportedGateError(f"Rotation gate requires a parameter: {gate}")
 
         ancilla_qubits = _normalize_ancillas(ancilla=ancilla, ancillas=ancillas)

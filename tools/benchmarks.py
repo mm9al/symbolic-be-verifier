@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import re
 import shutil
 import sys
 from dataclasses import dataclass
@@ -18,7 +19,9 @@ sys.path.insert(0, str(ROOT))
 
 from symbolic.expr import OpExpr
 
-DEFAULT_BLOCK_ENCODING_SIZES = (4, 8, 16, 32)
+DEFAULT_MIN_SIZE = 2
+DEFAULT_MAX_SIZE = 512
+DEFAULT_BLOCK_ENCODING_SIZES = tuple(range(DEFAULT_MIN_SIZE, DEFAULT_MAX_SIZE))
 
 
 @dataclass(frozen=True)
@@ -96,7 +99,7 @@ class HamiltonianBenchmark:
             "max_locality": str(self.max_locality),
             "ancillas": " ".join(str(index) for index in self.ancillas),
             "systems": " ".join(str(index) for index in self.systems),
-            "qasm_path": str(qasm_path.relative_to(ROOT)),
+            "qasm_path": _format_path(qasm_path),
             "expected": str(self.expected_operator()),
         }
 
@@ -105,8 +108,9 @@ def make_hamiltonian(model: str, n: int, *, graph: str | None = None) -> Hamilto
     model = model.lower()
     if model == "ising":
         return HamiltonianBenchmark(
-            benchmark_id=f"ising_n{n}",
+            benchmark_id=f"ising_periodic_n{n}",
             model=model,
+            graph="periodic",
             n_system=n,
             terms=tuple(ising_terms(n)),
         )
@@ -164,8 +168,8 @@ def pauli_sum_to_expected_string(terms: Sequence[PauliTerm], *, n_system: int) -
 
 def ising_terms(n: int, J: int | float | Fraction = 1, g: int | float | Fraction = 1) -> list[PauliTerm]:
     terms = []
-    for i in range(n - 1):
-        terms.append(PauliTerm.from_mapping(J, {i: "Z", i + 1: "Z"}))
+    for i in range(n):
+        terms.append(PauliTerm.from_mapping(J, {i: "Z", (i + 1) % n: "Z"}))
     for i in range(n):
         terms.append(PauliTerm.from_mapping(g, {i: "X"}))
     return terms
@@ -465,13 +469,37 @@ def _format_fraction(value: Fraction) -> str:
     return f"{value.numerator}/{value.denominator}"
 
 
+def _format_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
 def _parse_sizes(text: str) -> tuple[int, ...]:
-    return tuple(int(piece.strip()) for piece in text.split(",") if piece.strip())
+    sizes: list[int] = []
+    for raw_piece in text.split(","):
+        piece = raw_piece.strip()
+        if not piece:
+            continue
+        range_match = re.fullmatch(r"(\d+)\s*(?:\.\.|-)\s*(\d+)", piece)
+        if range_match:
+            start, stop = (int(value) for value in range_match.groups())
+            if start > stop:
+                raise ValueError(f"Invalid descending size range: {piece}")
+            sizes.extend(range(start, stop + 1))
+        else:
+            sizes.append(int(piece))
+    return tuple(dict.fromkeys(sizes))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate RQ1 block-encoding benchmark QASM files.")
-    parser.add_argument("--sizes", default=",".join(str(n) for n in DEFAULT_BLOCK_ENCODING_SIZES))
+    parser.add_argument(
+        "--sizes",
+        default=f"{DEFAULT_MIN_SIZE}..{DEFAULT_MAX_SIZE}",
+        help='Comma-separated sizes or ranges, e.g. "2..128" or "2,3,5,8".',
+    )
     parser.add_argument("--out-dir", type=Path, default=ROOT / "benchmarks" / "block_encoding")
     args = parser.parse_args(argv)
 
@@ -488,8 +516,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         rows.append(benchmark.manifest_row(qasm_path))
     write_manifest(rows, manifest_path)
 
-    print(f"Wrote {len(rows)} block-encoding benchmarks to {out_dir.relative_to(ROOT)}")
-    print(f"Wrote manifest to {manifest_path.relative_to(ROOT)}")
+    print(f"Wrote {len(rows)} block-encoding benchmarks to {_format_path(out_dir)}")
+    print(f"Wrote manifest to {_format_path(manifest_path)}")
     return 0
 
 

@@ -48,11 +48,11 @@ Print only the final symbolic branches:
 The checked-in RQ1 benchmark suite targets block-encoding verification for
 three Hamiltonian families:
 
-- open-chain transverse-field Ising, with `2n - 1` Pauli terms
+- periodic transverse-field Ising, with `2n` Pauli terms
 - MaxCut on the deterministic cycle graph `C_n`, with `2n` LCU terms
 - open-chain isotropic Heisenberg, with `3(n - 1)` Pauli terms including `Y`
 
-Generate the default `n = 4, 8, 16, 32` benchmark QASM files and manifest:
+Generate the default consecutive-size benchmark suite, `n = 2..128`:
 
 ```bash
 .venv/bin/python evaluation/generate_benchmarks.py
@@ -68,7 +68,7 @@ Results are written to `evaluation/results/block_encoding_results.csv`. For a
 quick smoke suite, pass a smaller size list such as:
 
 ```bash
-.venv/bin/python evaluation/generate_benchmarks.py --sizes 4
+.venv/bin/python evaluation/generate_benchmarks.py --sizes 2..8
 ```
 
 For multiple ancilla and system qubits, pass QASM indices in the order they
@@ -137,6 +137,9 @@ Verification results:
 - `PASS`: final all-zero branch exactly equals the expected operator.
 - `PASS_UP_TO_SCALE`: final all-zero branch is `scale * expected` for a scalar `scale`.
 - `FAIL`: final all-zero branch is neither exactly equal nor equal up to a scalar.
+
+Numeric coefficient comparisons use a default absolute tolerance of `1e-8`.
+Override it with `--tolerance` when running `symbolic.verify`.
 
 ## QSP Verification
 

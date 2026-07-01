@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from dataclasses import dataclass
+import io
 from pathlib import Path
 import re
+import time
 from typing import Iterable, List, Optional, Sequence, Tuple
 
 import sympy as sp
 
 from .branch_state import BranchState, Gate
 from .expr import OpExpr, parse_operator_expression
+from . import profile
 from .qasm_parser import parse_qasm_file
 from .scalar import scalar_simplify
 from .word_expr import GARBAGE_ATOMS, WordExpr, eliminate
@@ -30,9 +34,23 @@ class TraceStep:
 
 
 @dataclass(frozen=True)
+class GateProfileStep:
+    gate_id: int
+    gate_name: str
+    gate: str
+    num_nonzero_branches: int
+    total_operator_terms: int
+    max_terms_per_branch: int
+    time_this_gate: float
+    time_simplify: float
+    time_combine: float
+
+
+@dataclass(frozen=True)
 class VerificationResult:
     final_state: BranchState
     trace: Sequence[TraceStep]
+    gate_profiles: Sequence[GateProfileStep] = ()
     expected: Optional[OpExpr] = None
     ancilla_qubits: Tuple[int, ...] = (0,)
     system_qubits: Tuple[int, ...] = (1,)
@@ -88,6 +106,7 @@ def run_circuit(
     system: int = 1,
     systems: Optional[Sequence[int]] = None,
     keep_trace: bool = False,
+    profile_gates: bool = False,
     expression_kind: Optional[str] = None,
 ) -> VerificationResult:
     gates = list(gates)
@@ -101,13 +120,44 @@ def run_circuit(
         expression_kind=expression_kind,
     )
     trace: List[TraceStep] = [TraceStep(0, None, state)] if keep_trace else []
+    gate_profiles: List[GateProfileStep] = []
 
     for index, gate in enumerate(gates, start=1):
-        state = state.apply(gate, ancillas=ancilla_qubits, systems=system_qubits)
+        counters = profile.ProfileCounters()
+        if profile_gates:
+            profile.set_current(counters)
+        started = time.perf_counter()
+        try:
+            state = state.apply(gate, ancillas=ancilla_qubits, systems=system_qubits)
+        finally:
+            if profile_gates:
+                profile.clear_current()
+        elapsed = time.perf_counter() - started
         if keep_trace:
             trace.append(TraceStep(index, gate, state))
+        if profile_gates:
+            num_branches, total_terms, max_terms = _branch_profile_stats(state)
+            gate_profiles.append(
+                GateProfileStep(
+                    gate_id=index,
+                    gate_name=gate.name,
+                    gate=str(gate),
+                    num_nonzero_branches=num_branches,
+                    total_operator_terms=total_terms,
+                    max_terms_per_branch=max_terms,
+                    time_this_gate=elapsed,
+                    time_simplify=counters.simplify_sec,
+                    time_combine=counters.combine_sec,
+                )
+            )
 
-    return VerificationResult(final_state=state, trace=trace, ancilla_qubits=ancilla_qubits, system_qubits=system_qubits)
+    return VerificationResult(
+        final_state=state,
+        trace=trace,
+        gate_profiles=gate_profiles,
+        ancilla_qubits=ancilla_qubits,
+        system_qubits=system_qubits,
+    )
 
 
 def verify_qasm_file(
@@ -119,6 +169,7 @@ def verify_qasm_file(
     system: int = 1,
     systems: Optional[Sequence[int]] = None,
     keep_trace: bool = False,
+    profile_gates: bool = False,
     base: str | OpExpr | None = None,
     expected_polynomial: str | sp.Expr | None = None,
     hermitian_base: bool = False,
@@ -139,6 +190,7 @@ def verify_qasm_file(
         ancillas=ancilla_qubits,
         systems=system_qubits,
         keep_trace=keep_trace,
+        profile_gates=profile_gates,
         expression_kind=expression_kind,
     )
     qsp_normalized = None
@@ -175,6 +227,7 @@ def verify_qasm_file(
     return VerificationResult(
         final_state=result.final_state,
         trace=result.trace,
+        gate_profiles=result.gate_profiles,
         expected=expected_expr,
         ancilla_qubits=ancilla_qubits,
         system_qubits=system_qubits,
@@ -246,6 +299,57 @@ def format_status(result: VerificationResult) -> str:
     if result.status is not None:
         return result.status
     return "NO_EXPECTED"
+
+
+def format_gate_profiles_csv(result: VerificationResult) -> str:
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=gate_profile_fieldnames())
+    writer.writeheader()
+    for row in gate_profile_rows(result):
+        writer.writerow(row)
+    return output.getvalue()
+
+
+def gate_profile_rows(result: VerificationResult) -> list[dict[str, str]]:
+    return [
+        {
+            "gate_id": str(step.gate_id),
+            "gate_name": step.gate_name,
+            "gate": step.gate,
+            "num_nonzero_branches": str(step.num_nonzero_branches),
+            "total_operator_terms": str(step.total_operator_terms),
+            "max_terms_per_branch": str(step.max_terms_per_branch),
+            "time_this_gate": f"{step.time_this_gate:.9f}",
+            "time_simplify": f"{step.time_simplify:.9f}",
+            "time_combine": f"{step.time_combine:.9f}",
+        }
+        for step in result.gate_profiles
+    ]
+
+
+def gate_profile_fieldnames() -> list[str]:
+    return [
+        "gate_id",
+        "gate_name",
+        "gate",
+        "num_nonzero_branches",
+        "total_operator_terms",
+        "max_terms_per_branch",
+        "time_this_gate",
+        "time_simplify",
+        "time_combine",
+    ]
+
+
+def _branch_profile_stats(state: BranchState) -> tuple[int, int, int]:
+    term_counts = [_branch_term_count(branch) for branch in state.branches.values()]
+    if not term_counts:
+        return 0, 0, 0
+    return len(term_counts), sum(term_counts), max(term_counts)
+
+
+def _branch_term_count(branch: OpExpr | WordExpr) -> int:
+    return len(branch.terms)
 
 
 def _normalize_expected(expected: str | OpExpr | None, *, num_system_qubits: int) -> Optional[OpExpr]:
@@ -454,6 +558,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--systems", nargs="+", help='System qubits in operator-index order, e.g. q[2] q[3].')
     parser.add_argument("--trace", action="store_true", help="Print every intermediate B0/B1 update.")
     parser.add_argument("--result-only", action="store_true", help="Print only PASS/FAIL status.")
+    parser.add_argument("--profile-gates", action="store_true", help="Collect per-gate branch/term/timing counters.")
+    parser.add_argument("--profile-output", type=Path, help="Write --profile-gates CSV output to this path instead of stdout.")
     args = parser.parse_args(argv)
 
     ancillas = tuple(_parse_qubit_arg(value) for value in args.ancillas) if args.ancillas is not None else None
@@ -472,7 +578,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         hermitian_base=args.hermitian_base,
         compare_polynomial_only=args.compare_polynomial_only,
         tolerance=args.tolerance,
+        profile_gates=args.profile_gates,
     )
+    if args.profile_gates:
+        profile_csv = format_gate_profiles_csv(result)
+        if args.profile_output is not None:
+            args.profile_output.parent.mkdir(parents=True, exist_ok=True)
+            args.profile_output.write_text(profile_csv, encoding="utf-8")
+        else:
+            print(profile_csv, end="")
     if args.result_only:
         print(format_status(result))
     else:

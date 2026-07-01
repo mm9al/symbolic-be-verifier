@@ -5,6 +5,11 @@ import re
 from typing import Iterable, List, Optional
 
 import sympy as sp
+from sympy.parsing.sympy_parser import (
+    implicit_multiplication_application,
+    parse_expr,
+    standard_transformations,
+)
 
 from .branch_state import Gate
 from .scalar import parse_scalar
@@ -95,4 +100,29 @@ def _parse_operands(text: str, known_register: Optional[str], line_number: int) 
 
 
 def _parse_parameter(text: str) -> sp.Expr:
+    if _contains_decimal_literal(text):
+        return _parse_numeric_angle(text)
     return parse_scalar(text)
+
+
+def _contains_decimal_literal(text: str) -> bool:
+    return bool(re.search(r"(?<![A-Za-z_])(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?|(?<![A-Za-z_])\d+[eE][+-]?\d+", text))
+
+
+def _parse_numeric_angle(text: str) -> sp.Expr:
+    local_dict = {
+        "I": sp.I,
+        "i": sp.I,
+        "pi": sp.pi,
+        "sqrt": sp.sqrt,
+        "sin": sp.sin,
+        "cos": sp.cos,
+        "exp": sp.exp,
+    }
+    transformations = standard_transformations + (implicit_multiplication_application,)
+    return parse_expr(
+        text,
+        local_dict=local_dict,
+        transformations=transformations,
+        evaluate=True,
+    )

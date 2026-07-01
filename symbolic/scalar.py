@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import cmath
 from functools import lru_cache
+import math
+import time
+from numbers import Number
 
 import sympy as sp
 from sympy.parsing.sympy_parser import (
@@ -9,6 +13,8 @@ from sympy.parsing.sympy_parser import (
     rationalize,
     standard_transformations,
 )
+
+from . import profile
 
 
 def parse_scalar(text: str) -> sp.Expr:
@@ -30,7 +36,30 @@ def parse_scalar(text: str) -> sp.Expr:
 def scalar_simplify(expr: sp.Expr) -> sp.Expr:
     """Simplify one scalar coefficient without touching Pauli-string structure."""
 
-    return _scalar_simplify_cached(sp.sympify(expr))
+    if profile.current() is None:
+        return _scalar_simplify_impl(expr)
+
+    started = time.perf_counter()
+    try:
+        return _scalar_simplify_impl(expr)
+    finally:
+        profile.add_simplify(time.perf_counter() - started)
+
+
+def _scalar_simplify_impl(expr: sp.Expr) -> sp.Expr:
+    if isinstance(expr, Number) and not isinstance(expr, sp.Basic):
+        return expr
+
+    sympified = sp.sympify(expr)
+    if getattr(sympified, "is_Float", False):
+        return float(sympified)
+    if isinstance(sympified, sp.Basic) and sympified.has(sp.Float):
+        if sympified.is_number:
+            value = complex(sympified.evalf())
+            return value.real if value.imag == 0 else value
+        return sympified
+
+    return _scalar_simplify_cached(sympified)
 
 
 @lru_cache(maxsize=1_000_000)
@@ -109,16 +138,36 @@ def _split_bare_trig_square(expr: sp.Expr) -> tuple[str, sp.Expr] | None:
 
 
 def cos_half(theta: sp.Expr) -> sp.Expr:
+    numeric = _numeric_float(theta)
+    if numeric is not None:
+        return math.cos(numeric / 2)
     return scalar_simplify(sp.cos(theta / 2))
 
 
 def sin_half(theta: sp.Expr) -> sp.Expr:
+    numeric = _numeric_float(theta)
+    if numeric is not None:
+        return math.sin(numeric / 2)
     return scalar_simplify(sp.sin(theta / 2))
 
 
 def exp_minus_i_half(theta: sp.Expr) -> sp.Expr:
+    numeric = _numeric_float(theta)
+    if numeric is not None:
+        return cmath.exp(-0.5j * numeric)
     return scalar_simplify(sp.exp(-sp.I * theta / 2))
 
 
 def exp_plus_i_half(theta: sp.Expr) -> sp.Expr:
+    numeric = _numeric_float(theta)
+    if numeric is not None:
+        return cmath.exp(0.5j * numeric)
     return scalar_simplify(sp.exp(sp.I * theta / 2))
+
+
+def _numeric_float(theta: sp.Expr) -> float | None:
+    if isinstance(theta, float):
+        return theta
+    if isinstance(theta, sp.Basic) and theta.has(sp.Float) and theta.is_number:
+        return float(theta.evalf())
+    return None

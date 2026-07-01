@@ -18,7 +18,7 @@ DEFAULT_TIMEOUT_SEC = 300.0
 
 sys.path.insert(0, str(ROOT))
 
-from symbolic.verify import verify_qasm_file  # noqa: E402
+from symbolic.verify import gate_profile_fieldnames, gate_profile_rows, verify_qasm_file  # noqa: E402
 
 
 def main() -> int:
@@ -41,13 +41,13 @@ def main() -> int:
             if row["model"] in timeout_models:
                 result = _skipped_after_timeout(row)
             else:
-                result = _run_benchmark(row, timeout_sec=args.timeout_sec)
+                result = _run_benchmark(row, timeout_sec=args.timeout_sec, profile_dir=args.profile_dir)
                 if result["status"] == "TIMEOUT":
                     timeout_models.add(row["model"])
             writer.writerow(result)
             handle.flush()
 
-    print(f"Wrote {args.output.relative_to(ROOT)}")
+    print(f"Wrote {_format_path(args.output)}")
     return 0
 
 
@@ -62,6 +62,11 @@ def _parse_args() -> argparse.Namespace:
         default=DEFAULT_TIMEOUT_SEC,
         help=f"Per-benchmark timeout in seconds. Use 0 to disable. Default: {DEFAULT_TIMEOUT_SEC:g}.",
     )
+    parser.add_argument(
+        "--profile-dir",
+        type=Path,
+        help="Optional directory for per-benchmark gate-level profile CSV files.",
+    )
     return parser.parse_args()
 
 
@@ -70,12 +75,12 @@ def _read_manifest(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
-def _run_benchmark(row: dict[str, str], *, timeout_sec: float) -> dict[str, str]:
+def _run_benchmark(row: dict[str, str], *, timeout_sec: float, profile_dir: Path | None) -> dict[str, str]:
     if timeout_sec <= 0:
-        return _run_benchmark_inner(row)
+        return _run_benchmark_inner(row, profile_dir=profile_dir)
 
     queue: mp.Queue = mp.Queue(maxsize=1)
-    process = mp.Process(target=_worker, args=(row, queue))
+    process = mp.Process(target=_worker, args=(row, queue, profile_dir))
     started = time.perf_counter()
     process.start()
     process.join(timeout_sec)
@@ -107,11 +112,11 @@ def _run_benchmark(row: dict[str, str], *, timeout_sec: float) -> dict[str, str]
     }
 
 
-def _worker(row: dict[str, str], queue: "mp.Queue") -> None:
-    queue.put(_run_benchmark_inner(row))
+def _worker(row: dict[str, str], queue: "mp.Queue", profile_dir: Path | None) -> None:
+    queue.put(_run_benchmark_inner(row, profile_dir=profile_dir))
 
 
-def _run_benchmark_inner(row: dict[str, str]) -> dict[str, str]:
+def _run_benchmark_inner(row: dict[str, str], *, profile_dir: Path | None) -> dict[str, str]:
     error = ""
     status = "ERROR"
     success = "False"
@@ -128,7 +133,10 @@ def _run_benchmark_inner(row: dict[str, str]) -> dict[str, str]:
             ancillas=ancillas,
             systems=systems,
             keep_trace=False,
+            profile_gates=profile_dir is not None,
         )
+        if profile_dir is not None:
+            _write_gate_profile(row, result, profile_dir)
         status = result.status or "NO_EXPECTED"
         success = str(result.success)
     except Exception as exc:
@@ -163,6 +171,17 @@ def _metadata(row: dict[str, str]) -> dict[str, str]:
         "max_locality": row["max_locality"],
         "qasm_path": row["qasm_path"],
     }
+
+
+def _write_gate_profile(row: dict[str, str], result, profile_dir: Path) -> None:
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    path = profile_dir / f"{row['benchmark_id']}_gate_profile.csv"
+    fieldnames = ["benchmark_id", *gate_profile_fieldnames()]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for profile_row in gate_profile_rows(result):
+            writer.writerow({"benchmark_id": row["benchmark_id"], **profile_row})
 
 
 def _skipped_after_timeout(row: dict[str, str]) -> dict[str, str]:
@@ -213,6 +232,13 @@ def _process_maxrss_mb() -> float:
     if sys.platform == "darwin":
         return rss / (1024 * 1024)
     return rss / 1024
+
+
+def _format_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
 
 
 if __name__ == "__main__":

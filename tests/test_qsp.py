@@ -194,7 +194,7 @@ def test_hamsim_qsp_y_base_regression_uses_adjoint_not_complex_conjugate():
         base=y_base,
         expected_polynomial=RAW_COS_COMPONENT_Y_RESPONSE,
     )
-    assert raw_cos.qsp_actual.equals(parse_operator_expression(RAW_COS_COMPONENT_Y_RESPONSE))
+    assert pauli_expr_close(raw_cos.qsp_actual, parse_operator_expression(RAW_COS_COMPONENT_Y_RESPONSE))
 
     cos = _verify_qasm_dense_on_base(
         QSP_EXAMPLE_DIR / "qsp_hamsim_cos_selector_t05_eps1e-4_deg4.qasm",

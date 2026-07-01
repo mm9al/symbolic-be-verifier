@@ -33,7 +33,8 @@ def test_parse_qasm3_register_and_parameterized_gate():
     assert len(gates) == 1
     assert gates[0].name == "rx"
     assert gates[0].qubits == (0,)
-    assert sp.simplify(gates[0].parameter - sp.pi / 2) == 0
+    assert gates[0].parameter.has(sp.Float)
+    assert abs(float(gates[0].parameter.evalf()) - float(sp.pi / 2)) < 1e-15
 
 
 def test_parse_symbolic_rotation_parameter():

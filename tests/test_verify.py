@@ -12,6 +12,7 @@ from symbolic.verify import (
     PASS,
     PASS_UP_TO_SCALE,
     VerificationResult,
+    format_gate_profiles_csv,
     format_result,
     pauli_expr_close,
     polynomial_close,
@@ -39,6 +40,20 @@ def test_lcu_x_minus_z_example_verifies():
     assert result.status == PASS
     assert result.final_state.b0.equals((pauli("X") - pauli("Z")).scale(sp.Rational(1, 2)))
     assert len(result.trace) == len(parse_qasm_file(path)) + 1
+
+
+def test_gate_profile_records_branch_and_term_counters():
+    result = verify_qasm_file(
+        Path(__file__).parents[1] / "examples" / "lcu_x_minus_z.qasm",
+        expected="(X - Z)/2",
+        profile_gates=True,
+    )
+    output = format_gate_profiles_csv(result)
+
+    assert result.gate_profiles
+    assert "gate_id,gate_name,gate,num_nonzero_branches,total_operator_terms,max_terms_per_branch" in output
+    assert "time_this_gate,time_simplify,time_combine" in output
+    assert result.gate_profiles[0].num_nonzero_branches >= 1
 
 
 def test_lcu_xx_plus_zz_example_verifies():

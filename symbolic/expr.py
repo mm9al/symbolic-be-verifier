@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
+import time
 from typing import Dict, Iterable, Mapping, Optional, Tuple
 
 import sympy as sp
@@ -12,6 +13,7 @@ from sympy.parsing.sympy_parser import (
     standard_transformations,
 )
 
+from . import profile
 from .scalar import scalar_simplify
 
 
@@ -116,9 +118,14 @@ class OpExpr:
 
     def __add__(self, other: "OpExpr") -> "OpExpr":
         left, right = _align_exprs(self, other)
-        terms = dict(left.terms)
-        for pauli_string, coeff in right.terms.items():
-            terms[pauli_string] = terms.get(pauli_string, sp.Integer(0)) + coeff
+        started = time.perf_counter() if profile.current() is not None else None
+        try:
+            terms = dict(left.terms)
+            for pauli_string, coeff in right.terms.items():
+                terms[pauli_string] = terms.get(pauli_string, sp.Integer(0)) + coeff
+        finally:
+            if started is not None:
+                profile.add_combine(time.perf_counter() - started)
         return OpExpr(terms, num_qubits=left.num_qubits)
 
     def __sub__(self, other: "OpExpr") -> "OpExpr":
@@ -129,17 +136,22 @@ class OpExpr:
 
     def __mul__(self, other: "OpExpr") -> "OpExpr":
         left, right = _align_exprs(self, other)
-        terms: Dict[PauliString, sp.Expr] = {}
-        for left_string, left_coeff in left.terms.items():
-            for right_string, right_coeff in right.terms.items():
-                phase = sp.Integer(1)
-                product = []
-                for left_op, right_op in zip(left_string, right_string):
-                    local_phase, local_product = _PAULI_PRODUCT[(left_op, right_op)]
-                    phase *= local_phase
-                    product.append(local_product)
-                key = tuple(product)
-                terms[key] = terms.get(key, sp.Integer(0)) + left_coeff * right_coeff * phase
+        started = time.perf_counter() if profile.current() is not None else None
+        try:
+            terms: Dict[PauliString, sp.Expr] = {}
+            for left_string, left_coeff in left.terms.items():
+                for right_string, right_coeff in right.terms.items():
+                    phase = sp.Integer(1)
+                    product = []
+                    for left_op, right_op in zip(left_string, right_string):
+                        local_phase, local_product = _PAULI_PRODUCT[(left_op, right_op)]
+                        phase *= local_phase
+                        product.append(local_product)
+                    key = tuple(product)
+                    terms[key] = terms.get(key, sp.Integer(0)) + left_coeff * right_coeff * phase
+        finally:
+            if started is not None:
+                profile.add_combine(time.perf_counter() - started)
         return OpExpr(terms, num_qubits=left.num_qubits)
 
     def equals(self, other: "OpExpr") -> bool:
@@ -198,34 +210,36 @@ def _format_scalar(coeff: sp.Expr) -> str:
 
 def _format_common_factor(inside: str, coeff: sp.Expr) -> str:
     coeff = scalar_simplify(coeff)
+    coeff_expr = sp.sympify(coeff)
     if coeff == 1:
         return inside
     if coeff == -1:
         return f"-({inside})"
-    if coeff.is_Rational and coeff.p == 1:
-        return f"({inside})/{coeff.q}"
-    if coeff.is_Rational and coeff.p == -1:
-        return f"-({inside})/{coeff.q}"
+    if coeff_expr.is_Rational and coeff_expr.p == 1:
+        return f"({inside})/{coeff_expr.q}"
+    if coeff_expr.is_Rational and coeff_expr.p == -1:
+        return f"-({inside})/{coeff_expr.q}"
     return f"{_format_scalar(coeff)}*({inside})"
 
 
 def _format_term(pauli_string: PauliString, coeff: sp.Expr, num_qubits: int) -> str:
     coeff = scalar_simplify(coeff)
+    coeff_expr = sp.sympify(coeff)
     body = _format_pauli_string(pauli_string, num_qubits)
     if coeff == 1:
         return body
     if coeff == -1:
         return f"-{body}"
-    if coeff.is_Rational and coeff.p == 1:
-        return f"{body}/{coeff.q}"
-    if coeff.is_Rational and coeff.p == -1:
-        return f"-{body}/{coeff.q}"
+    if coeff_expr.is_Rational and coeff_expr.p == 1:
+        return f"{body}/{coeff_expr.q}"
+    if coeff_expr.is_Rational and coeff_expr.p == -1:
+        return f"-{body}/{coeff_expr.q}"
     return f"{_format_factor_scalar(coeff)}*{body}"
 
 
 def _format_factor_scalar(coeff: sp.Expr) -> str:
     text = _format_scalar(coeff)
-    if coeff.is_Add:
+    if sp.sympify(coeff).is_Add:
         return f"({text})"
     return text
 
