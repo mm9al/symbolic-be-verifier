@@ -43,6 +43,34 @@ Print only the final symbolic branches:
 .venv/bin/python -m symbolic.verify examples/lcu_x_minus_z.qasm --expected "(X - Z)/2"
 ```
 
+## RQ1 Block-Encoding Evaluation
+
+The checked-in RQ1 benchmark suite targets block-encoding verification for
+three Hamiltonian families:
+
+- open-chain transverse-field Ising, with `2n - 1` Pauli terms
+- MaxCut on the deterministic cycle graph `C_n`, with `2n` LCU terms
+- open-chain isotropic Heisenberg, with `3(n - 1)` Pauli terms including `Y`
+
+Generate the default `n = 4, 8, 16, 32` benchmark QASM files and manifest:
+
+```bash
+.venv/bin/python evaluation/generate_benchmarks.py
+```
+
+Run the symbolic block-encoding evaluation:
+
+```bash
+.venv/bin/python evaluation/run_block_encoding.py
+```
+
+Results are written to `evaluation/results/block_encoding_results.csv`. For a
+quick smoke suite, pass a smaller size list such as:
+
+```bash
+.venv/bin/python evaluation/generate_benchmarks.py --sizes 4
+```
+
 For multiple ancilla and system qubits, pass QASM indices in the order they
 should appear in branch keys and Pauli strings. Quote `q[...]` arguments in
 shells such as zsh, or pass plain integers.

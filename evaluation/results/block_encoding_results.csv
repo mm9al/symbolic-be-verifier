@@ -1,0 +1,9 @@
+benchmark_id,rq,stage,model,graph,n_system,n_terms,alpha,selector_ancillas,n_ancilla,max_locality,qasm_path,runtime_sec,tracemalloc_peak_mb,process_maxrss_mb,status,success,error
+ising_n4,RQ1,block_encoding,ising,,4,7,7,3,4,2,benchmarks/block_encoding/generated/ising/ising_n4.qasm,108.269444084,14.709717,90.140625,PASS,True,
+ising_n8,RQ1,block_encoding,ising,,8,15,15,4,5,2,benchmarks/block_encoding/generated/ising/ising_n8.qasm,300.003608416,,,TIMEOUT,False,timeout after 300s
+ising_n16,RQ1,block_encoding,ising,,16,31,31,5,6,2,benchmarks/block_encoding/generated/ising/ising_n16.qasm,,,,SKIPPED_AFTER_TIMEOUT,,previous benchmark in this model timed out
+ising_n32,RQ1,block_encoding,ising,,32,63,63,6,7,2,benchmarks/block_encoding/generated/ising/ising_n32.qasm,,,,SKIPPED_AFTER_TIMEOUT,,previous benchmark in this model timed out
+maxcut_cycle_n4,RQ1,block_encoding,maxcut,cycle,4,8,4,3,4,2,benchmarks/block_encoding/generated/maxcut/maxcut_cycle_n4.qasm,95.642462333,13.508382,75.093750,PASS,True,
+maxcut_cycle_n8,RQ1,block_encoding,maxcut,cycle,8,16,8,4,5,2,benchmarks/block_encoding/generated/maxcut/maxcut_cycle_n8.qasm,300.004142250,,,TIMEOUT,False,timeout after 300s
+maxcut_cycle_n16,RQ1,block_encoding,maxcut,cycle,16,32,16,5,6,2,benchmarks/block_encoding/generated/maxcut/maxcut_cycle_n16.qasm,,,,SKIPPED_AFTER_TIMEOUT,,previous benchmark in this model timed out
+maxcut_cycle_n32,RQ1,block_encoding,maxcut,cycle,32,64,32,6,7,2,benchmarks/block_encoding/generated/maxcut/maxcut_cycle_n32.qasm,,,,SKIPPED_AFTER_TIMEOUT,,previous benchmark in this model timed out
