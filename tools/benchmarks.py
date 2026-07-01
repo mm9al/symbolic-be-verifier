@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT))
 from symbolic.expr import OpExpr
 
 DEFAULT_MIN_SIZE = 2
-DEFAULT_MAX_SIZE = 512
+DEFAULT_MAX_SIZE = 128
 DEFAULT_BLOCK_ENCODING_SIZES = tuple(range(DEFAULT_MIN_SIZE, DEFAULT_MAX_SIZE))
 
 
