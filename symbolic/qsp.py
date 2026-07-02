@@ -293,14 +293,10 @@ def full_hamsim_qasm_snippet(
 ) -> str:
     block_ancillas = _normalize_qubit_list(block_ancillas, label="block ancilla")
     system_qubits = _normalize_qubit_list(system_qubits, label="system qubit")
-    if len(block_ancillas) != 1:
-        raise ValueError("full Hamiltonian simulation currently expects one block-encoding ancilla")
     if len(system_qubits) != 1:
         raise ValueError("full Hamiltonian simulation currently expects one system qubit")
     if len(sin_record["qsvt_projector_phases"]) != len(cos_record["qsvt_projector_phases"]) + 1:
         raise ValueError("full Hamiltonian simulation expects one more sine phase than cosine phase")
-
-    block_ancilla = block_ancillas[0]
 
     lines: list[str] = []
     lines.append(f"h {selector_qubit};")
@@ -321,7 +317,7 @@ def full_hamsim_qasm_snippet(
                 cos_psi,
                 component_selector_qubit=component_selector_qubit,
                 phase_qubit=phase_qubit,
-                block_ancilla=block_ancilla,
+                block_ancillas=block_ancillas,
             )
         )
         lines.append("")
@@ -332,7 +328,7 @@ def full_hamsim_qasm_snippet(
                 selector_qubit=selector_qubit,
                 component_selector_qubit=component_selector_qubit,
                 phase_qubit=phase_qubit,
-                block_ancilla=block_ancilla,
+                block_ancillas=block_ancillas,
             )
         )
         lines.append("")
@@ -361,7 +357,7 @@ def full_hamsim_qasm_snippet(
             selector_qubit=selector_qubit,
             component_selector_qubit=component_selector_qubit,
             phase_qubit=phase_qubit,
-            block_ancilla=block_ancilla,
+            block_ancillas=block_ancillas,
         )
     )
     lines.append("")
@@ -1179,31 +1175,24 @@ def _base_signed_phase(
     *,
     component_selector_qubit: str,
     phase_qubit: str,
-    block_ancilla: str,
+    block_ancillas: list[str],
 ) -> list[str]:
-    psi_text = f"{psi:.12g}"
-    neg_psi_text = f"{-psi:.12g}"
+    signed_angle = -2.0 * psi
     return [
         "// base cos signed phase",
-        f"x {component_selector_qubit};",
-        f"cx {component_selector_qubit}, {phase_qubit};",
-        f"x {component_selector_qubit};",
+        *_controlled_x_lines(
+            open_controls=[component_selector_qubit],
+            solid_controls=[],
+            target=phase_qubit,
+        ),
         "",
-        f"x {block_ancilla};",
-        f"rz({psi_text}) {phase_qubit};",
-        f"cx {block_ancilla}, {phase_qubit};",
-        f"rz({neg_psi_text}) {phase_qubit};",
-        f"cx {block_ancilla}, {phase_qubit};",
-        f"x {block_ancilla};",
+        *_phase_block(signed_angle, phase_qubit, block_ancillas),
         "",
-        f"rz({neg_psi_text}) {phase_qubit};",
-        f"cx {block_ancilla}, {phase_qubit};",
-        f"rz({psi_text}) {phase_qubit};",
-        f"cx {block_ancilla}, {phase_qubit};",
-        "",
-        f"x {component_selector_qubit};",
-        f"cx {component_selector_qubit}, {phase_qubit};",
-        f"x {component_selector_qubit};",
+        *_controlled_x_lines(
+            open_controls=[component_selector_qubit],
+            solid_controls=[],
+            target=phase_qubit,
+        ),
     ]
 
 
@@ -1213,38 +1202,55 @@ def _controlled_signed_phase(
     selector_qubit: str,
     component_selector_qubit: str,
     phase_qubit: str,
-    block_ancilla: str,
+    block_ancillas: list[str],
 ) -> list[str]:
-    psi_text = f"{psi:.12g}"
-    neg_psi_text = f"{-psi:.12g}"
+    signed_angle = -2.0 * psi
     return [
-        f"x {block_ancilla};",
-        f"mcx {block_ancilla}, {selector_qubit}, {phase_qubit};",
-        f"x {block_ancilla};",
+        *_controlled_x_lines(
+            open_controls=[component_selector_qubit],
+            solid_controls=[selector_qubit],
+            target=phase_qubit,
+        ),
         "",
-        f"x {component_selector_qubit};",
-        f"mcx {component_selector_qubit}, {selector_qubit}, {phase_qubit};",
-        f"x {component_selector_qubit};",
+        *_controlled_phase_block(
+            signed_angle,
+            selector_qubit=selector_qubit,
+            phase_qubit=phase_qubit,
+            block_ancillas=block_ancillas,
+        ),
         "",
-        f"rz({neg_psi_text}) {phase_qubit};",
-        "",
-        f"x {component_selector_qubit};",
-        f"mcx {component_selector_qubit}, {selector_qubit}, {phase_qubit};",
-        f"x {component_selector_qubit};",
-        "",
-        f"rz({psi_text}) {phase_qubit};",
-        "",
-        f"mcx {selector_qubit}, {component_selector_qubit}, {phase_qubit};",
-        "",
-        f"rz({psi_text}) {phase_qubit};",
-        "",
-        f"mcx {selector_qubit}, {component_selector_qubit}, {phase_qubit};",
-        "",
-        f"rz({neg_psi_text}) {phase_qubit};",
-        "",
-        f"x {block_ancilla};",
-        f"mcx {block_ancilla}, {selector_qubit}, {phase_qubit};",
-        f"x {block_ancilla};",
+        *_controlled_x_lines(
+            open_controls=[component_selector_qubit],
+            solid_controls=[selector_qubit],
+            target=phase_qubit,
+        ),
+    ]
+
+
+def _controlled_phase_block(
+    angle: float,
+    *,
+    selector_qubit: str,
+    phase_qubit: str,
+    block_ancillas: list[str],
+) -> list[str]:
+    return [
+        *_controlled_x_lines(
+            open_controls=block_ancillas,
+            solid_controls=[selector_qubit],
+            target=phase_qubit,
+        ),
+        *_multi_controlled_rz(
+            angle,
+            open_controls=[],
+            solid_controls=[selector_qubit],
+            target=phase_qubit,
+        ),
+        *_controlled_x_lines(
+            open_controls=block_ancillas,
+            solid_controls=[selector_qubit],
+            target=phase_qubit,
+        ),
     ]
 
 

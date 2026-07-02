@@ -221,6 +221,18 @@ python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --component full --write-ex
   --system-qubit 'q[4]'
 ```
 
+For a block encoding whose `U_H` has multiple block ancillas, pass the whole
+block register with `--block-ancillas`:
+
+```bash
+python3 tools/hamsim_qsp.py --tau 0.5 --epsilon 1e-4 --component full --write-examples \
+  --selector-qubit 'q[0]' \
+  --component-selector-qubit 'q[1]' \
+  --phase-qubit 'q[2]' \
+  --block-ancillas 'q[3]' 'q[4]' \
+  --system-qubit 'q[5]'
+```
+
 This writes:
 
 ```text

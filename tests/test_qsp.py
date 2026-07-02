@@ -1,5 +1,6 @@
 import json
 import math
+import re
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from symbolic.qsp import (
     adjoint_gate,
     build_raw_qsp_gate_list,
     daggerize_gate_list,
+    full_hamsim_qasm_file,
     full_hamsim_qasm_snippet,
     hamsim_exp_polynomial_expr,
     polynomial_expr,
@@ -281,6 +283,46 @@ def test_full_hamsim_xyz_example_verifies_mixed_hermitian_base():
     )
 
 
+def test_full_hamsim_generated_qasm_verifies_for_multiple_block_ancillas(tmp_path):
+    record = _full_hamsim_record_from_qasm(QSP_FULL_EXAMPLE_DIR / "qsp_hamsim_full_t05_eps01_deg3.qasm")
+    qasm_path = tmp_path / "qsp_hamsim_full_t05_eps01_m2_deg3.qasm"
+    qasm_path.write_text(
+        full_hamsim_qasm_file(
+            record,
+            precision=17,
+            selector_qubit="q[0]",
+            component_selector_qubit="q[1]",
+            phase_qubit="q[2]",
+            block_ancillas=["q[3]", "q[4]"],
+            system_qubits=["q[5]"],
+            signal_gate="UH",
+            signal_gate_dagger="UHdg",
+            controlled_signal_gate="cUH",
+            controlled_signal_gate_dagger="cUHdg",
+        ),
+        encoding="utf-8",
+    )
+
+    result = verify_qasm_file(
+        qasm_path,
+        ancillas=(0, 1, 2, 3, 4),
+        systems=(5,),
+        expected_polynomial=FULL_HAMSIM_DEG3_POLYNOMIAL,
+        hermitian_base=True,
+        compare_polynomial_only=True,
+    )
+
+    assert result.status == PASS
+    assert polynomial_close(result.qsp_polynomial, FULL_HAMSIM_DEG3_POLYNOMIAL)
+    _verify_qasm_dense_on_base(
+        qasm_path,
+        ancillas=(0, 1, 2, 3, 4),
+        systems=(5,),
+        base=_pauli_y_matrix(),
+        expected_polynomial=FULL_HAMSIM_DEG3_POLYNOMIAL,
+    )
+
+
 @pytest.mark.parametrize(
     ("qasm_path", "ancillas", "systems"),
     [
@@ -310,6 +352,46 @@ def _parse_qreg(qubit: str) -> int:
 
 def _close_list(actual: list[float], expected: list[float]) -> bool:
     return len(actual) == len(expected) and all(math.isclose(a, b) for a, b in zip(actual, expected))
+
+
+def _full_hamsim_record_from_qasm(qasm_path: Path) -> dict:
+    text = qasm_path.read_text(encoding="utf-8")
+    return {
+        "cos": {
+            "component": "cos",
+            "pyqsp_phases": _comment_values(text, "cos", "phi"),
+            "qsvt_projector_phases": _comment_values(text, "cos", "psi"),
+            "monomial_coefficients": _real_polynomial_coefficients(_comment_polynomial(text, "cos")),
+        },
+        "sin": {
+            "component": "sin",
+            "pyqsp_phases": _comment_values(text, "sin", "phi"),
+            "qsvt_projector_phases": _comment_values(text, "sin", "psi"),
+            "monomial_coefficients": _real_polynomial_coefficients(_comment_polynomial(text, "sin")),
+        },
+    }
+
+
+def _comment_values(text: str, component: str, label: str) -> list[float]:
+    values: dict[int, float] = {}
+    for index, value in re.findall(rf"//\s+{component} {label}_(\d+) = ([^\n]+)", text):
+        values[int(index)] = float(value)
+    return [values[index] for index in range(max(values) + 1)]
+
+
+def _comment_polynomial(text: str, component: str) -> str:
+    match = re.search(rf"// P_{component}\(x\) = ([^\n]+)", text)
+    assert match is not None
+    return match.group(1)
+
+
+def _real_polynomial_coefficients(polynomial: str) -> list[float]:
+    x = sp.Symbol("x")
+    parsed = sp.Poly(parse_polynomial(polynomial), x)
+    coeffs = [0.0] * (parsed.degree() + 1)
+    for (degree,), coeff in parsed.terms():
+        coeffs[degree] = float(sp.N(coeff, 30))
+    return coeffs
 
 
 def _verify_qsp_metadata(metadata: dict) -> None:
