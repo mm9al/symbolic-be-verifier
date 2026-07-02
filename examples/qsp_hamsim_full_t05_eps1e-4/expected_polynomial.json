@@ -29,9 +29,12 @@
     "q[3]",
     "--systems",
     "q[4]",
-    "--expected-polynomial",
-    "0.24999983177772669 - 0.12499995789742122*i*x - 0.031246969364139787*x^2 + 0.0052079962615880623*i*x^3 + 0.00064294590545715025*x^4 - 6.4429017930859816e-05*i*x^5",
-    "--hermitian-base",
-    "--compare-polynomial-only"
+    "--hamsim-tau",
+    "0.5",
+    "--hamsim-epsilon",
+    "0.0001",
+    "--hamsim-scale",
+    "0.25",
+    "--hermitian-base"
   ]
 }

@@ -141,7 +141,19 @@ Verification results:
 Numeric coefficient comparisons use a default absolute tolerance of `1e-8`.
 Override it with `--tolerance` when running `symbolic.verify`.
 
-## QSP Verification
+## Verification Routes
+
+The command-line verifier supports three separate routes:
+
+- Block encoding: compare the final all-zero branch to an operator passed with
+  `--expected`.
+- Hamiltonian simulation: compute the final symbolic polynomial and check it
+  directly against `scale * exp(-i*x*tau)` on `[-1, 1]` with `--hamsim-tau`,
+  `--hamsim-epsilon`, and `--hamsim-scale`.
+- General QSP: compute the final symbolic polynomial and compare it to a target
+  polynomial passed with `--expected-polynomial`.
+
+## General QSP Verification
 
 For QSP word-mode circuits, pass the QSP phase ancilla, block-encoding
 ancillas, and system qubits explicitly. The examples use this layout:
@@ -257,6 +269,12 @@ approximately:
 1/4 * exp(-i H tau)
 ```
 
+The hamsim route checks the final symbolic polynomial numerically against
+`scale * exp(-i*x*tau)` on `[-1, 1]`. The verifier computes
+`L = max_{x in [-1,1]} |f'(x)|` numerically, chooses a uniform grid with spacing
+at most `epsilon / (L + |scale*tau|)`, and accepts when every grid point has
+error at most `epsilon/2`.
+
 The checked-in degree-3 full Hamiltonian simulation fixture uses:
 
 ```text
@@ -274,8 +292,9 @@ Verify the degree-3 fixture with:
   examples/qsp_hamsim_full_t05_eps01/qsp_hamsim_full_t05_eps01_deg3.qasm \
   --ancillas 'q[0]' 'q[1]' 'q[2]' 'q[3]' \
   --systems 'q[4]' \
-  --base '(X - Z)/2' \
-  --expected-polynomial '0.24991946353954456 - 0.12497982382931781*i*x - 0.030604023458682638*x^2 + 0.005127459989174488*i*x^3' \
+  --hamsim-tau 0.5 \
+  --hamsim-epsilon 0.1 \
+  --hamsim-scale 0.25 \
   --hermitian-base \
   --result-only
 ```
@@ -287,8 +306,9 @@ Verify the degree-5 fixture with:
   examples/qsp_hamsim_full_t05_eps1e-4/qsp_hamsim_full_t05_eps1e-4_deg5.qasm \
   --ancillas 'q[0]' 'q[1]' 'q[2]' 'q[3]' \
   --systems 'q[4]' \
-  --base '(X - Z)/2' \
-  --expected-polynomial '0.24999983177772669 - 0.12499995789742122*i*x - 0.031246969364139787*x^2 + 0.0052079962615880623*i*x^3 + 0.00064294590545715025*x^4 - 6.4429017930859816e-05*i*x^5' \
+  --hamsim-tau 0.5 \
+  --hamsim-epsilon 1e-4 \
+  --hamsim-scale 0.25 \
   --hermitian-base \
   --result-only
 ```
@@ -301,8 +321,9 @@ time .venv/bin/python -m symbolic.verify \
   examples/qsp_hamsim_full_t05_eps01/qsp_hamsim_full_t05_eps01_deg3.qasm \
   --ancillas 'q[0]' 'q[1]' 'q[2]' 'q[3]' \
   --systems 'q[4]' \
-  --base '(X - Z)/2' \
-  --expected-polynomial '0.24991946353954456 - 0.12497982382931781*i*x - 0.030604023458682638*x^2 + 0.005127459989174488*i*x^3' \
+  --hamsim-tau 0.5 \
+  --hamsim-epsilon 0.1 \
+  --hamsim-scale 0.25 \
   --hermitian-base \
   --result-only
 ```

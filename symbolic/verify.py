@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import cmath
 import csv
 from dataclasses import dataclass
 import io
+import math
 from pathlib import Path
 import re
 import time
@@ -47,6 +49,23 @@ class GateProfileStep:
 
 
 @dataclass(frozen=True)
+class ApproximationCheck:
+    tau: float
+    epsilon: float
+    scale: sp.Expr
+    polynomial_lipschitz: float
+    target_lipschitz: float
+    spacing: float
+    num_grid_points: int
+    max_grid_error: float
+    worst_x: float
+
+    @property
+    def success(self) -> bool:
+        return self.max_grid_error <= self.epsilon / 2
+
+
+@dataclass(frozen=True)
 class VerificationResult:
     final_state: BranchState
     trace: Sequence[TraceStep]
@@ -59,6 +78,7 @@ class VerificationResult:
     qsp_expected_polynomial: Optional[sp.Expr] = None
     qsp_actual: Optional[OpExpr] = None
     qsp_expected: Optional[OpExpr] = None
+    qsp_approximation: Optional[ApproximationCheck] = None
     qsp_status: Optional[str] = None
     qsp_polynomial_only: bool = False
     tolerance: float = DEFAULT_TOLERANCE
@@ -174,15 +194,35 @@ def verify_qasm_file(
     expected_polynomial: str | sp.Expr | None = None,
     hermitian_base: bool = False,
     compare_polynomial_only: bool = False,
+    target_exp_tau: float | None = None,
+    target_exp_epsilon: float | None = None,
+    target_exp_scale: str | sp.Expr = 1,
     tolerance: float = DEFAULT_TOLERANCE,
 ) -> VerificationResult:
+    if (target_exp_tau is None) != (target_exp_epsilon is None):
+        raise ValueError("--hamsim-tau and --hamsim-epsilon must be set together")
+    if target_exp_epsilon is not None and target_exp_epsilon <= 0:
+        raise ValueError("--hamsim-epsilon must be positive")
+    selected_modes = sum(
+        (
+            expected is not None,
+            expected_polynomial is not None,
+            target_exp_tau is not None,
+        )
+    )
+    if selected_modes > 1:
+        raise ValueError("Choose exactly one verification route: --expected, --expected-polynomial, or --hamsim-*")
+
     gates = parse_qasm_file(path)
     ancilla_qubits = _normalize_ancillas(ancilla=ancilla, ancillas=ancillas)
     system_qubits = _normalize_systems(system=system, systems=systems)
     expected_expr = _normalize_expected(expected, num_system_qubits=len(system_qubits))
     expression_kind = (
         "word"
-        if expected_polynomial is not None or any(_is_qsp_word_gate(gate.name) for gate in gates)
+        if expected_polynomial is not None
+        or target_exp_tau is not None
+        or target_exp_epsilon is not None
+        or any(_is_qsp_word_gate(gate.name) for gate in gates)
         else "op"
     )
     result = run_circuit(
@@ -198,6 +238,7 @@ def verify_qasm_file(
     qsp_expected_polynomial = None
     qsp_actual = None
     qsp_expected = None
+    qsp_approximation = None
     qsp_status = None
 
     if expression_kind == "word":
@@ -206,23 +247,41 @@ def verify_qasm_file(
             raise ValueError("QSP word mode requires word-mode branch values")
         qsp_normalized = normalize_qsp_expression(top_left, hermitian_base=hermitian_base)
 
-    if expected_polynomial is not None:
-        if base is None and not compare_polynomial_only:
+    needs_qsp_polynomial = expected_polynomial is not None or target_exp_tau is not None
+    if needs_qsp_polynomial:
+        if expected_polynomial is not None and base is None and not compare_polynomial_only:
             raise ValueError("--base is required when --expected-polynomial is set")
         if qsp_normalized is None:
-            raise ValueError("--expected-polynomial requires QSP word-mode branch values")
+            raise ValueError("QSP polynomial checks require QSP word-mode branch values")
         if not is_h_polynomial_word(qsp_normalized):
             qsp_status = FAIL_GARBAGE
         else:
             qsp_polynomial = convert_h_word_to_polynomial(qsp_normalized)
-            qsp_expected_polynomial = parse_polynomial(expected_polynomial)
-            if compare_polynomial_only:
-                qsp_status = PASS if polynomial_close(qsp_polynomial, qsp_expected_polynomial, tol=tolerance) else FAIL
-            else:
-                base_expr = _normalize_base(base, num_system_qubits=len(system_qubits))
-                qsp_actual = eval_polynomial_on_pauliop(qsp_polynomial, base_expr)
-                qsp_expected = eval_polynomial_on_pauliop(qsp_expected_polynomial, base_expr)
-                qsp_status = PASS if pauli_expr_close(qsp_actual, qsp_expected, tol=tolerance) else FAIL
+
+    check_statuses: list[str] = []
+    if expected_polynomial is not None and qsp_status != FAIL_GARBAGE:
+        qsp_expected_polynomial = parse_polynomial(expected_polynomial)
+        if compare_polynomial_only:
+            check_statuses.append(
+                PASS if polynomial_close(qsp_polynomial, qsp_expected_polynomial, tol=tolerance) else FAIL
+            )
+        else:
+            base_expr = _normalize_base(base, num_system_qubits=len(system_qubits))
+            qsp_actual = eval_polynomial_on_pauliop(qsp_polynomial, base_expr)
+            qsp_expected = eval_polynomial_on_pauliop(qsp_expected_polynomial, base_expr)
+            check_statuses.append(PASS if pauli_expr_close(qsp_actual, qsp_expected, tol=tolerance) else FAIL)
+
+    if target_exp_tau is not None and qsp_status != FAIL_GARBAGE:
+        qsp_approximation = verify_polynomial_approximates_exp(
+            qsp_polynomial,
+            tau=target_exp_tau,
+            epsilon=target_exp_epsilon,
+            scale=target_exp_scale,
+        )
+        check_statuses.append(PASS if qsp_approximation.success else FAIL)
+
+    if qsp_status != FAIL_GARBAGE and check_statuses:
+        qsp_status = PASS if all(status == PASS for status in check_statuses) else FAIL
 
     return VerificationResult(
         final_state=result.final_state,
@@ -236,6 +295,7 @@ def verify_qasm_file(
         qsp_expected_polynomial=qsp_expected_polynomial,
         qsp_actual=qsp_actual,
         qsp_expected=qsp_expected,
+        qsp_approximation=qsp_approximation,
         qsp_status=qsp_status,
         qsp_polynomial_only=compare_polynomial_only,
         tolerance=tolerance,
@@ -287,6 +347,18 @@ def format_result(result: VerificationResult, *, show_trace: bool = False) -> st
             lines.append(f"Actual evaluated = {result.qsp_actual}")
         if result.qsp_expected is not None:
             lines.append(f"Expected evaluated = {result.qsp_expected}")
+        if result.qsp_approximation is not None:
+            check = result.qsp_approximation
+            lines.append(
+                "Approximation target = "
+                f"{_format_scalar(check.scale)} * exp(-i*x*{check.tau:.12g})"
+            )
+            lines.append(f"Approximation epsilon = {check.epsilon:.12g}")
+            lines.append(f"Approximation L = {check.polynomial_lipschitz:.12g}")
+            lines.append(f"Approximation target Lipschitz = {check.target_lipschitz:.12g}")
+            lines.append(f"Approximation grid spacing = {check.spacing:.12g}")
+            lines.append(f"Approximation grid points = {check.num_grid_points}")
+            lines.append(f"Approximation max grid error = {check.max_grid_error:.12g} at x = {check.worst_x:.12g}")
         if result.qsp_status is not None:
             lines.append(result.qsp_status)
 
@@ -397,6 +469,49 @@ def polynomial_close(actual: sp.Expr, expected: sp.Expr, *, tol: float = DEFAULT
     return all(scalar_close(coeff, 0, tol=tol) for _, coeff in poly.terms())
 
 
+def verify_polynomial_approximates_exp(
+    polynomial: str | sp.Expr,
+    *,
+    tau: float,
+    epsilon: float,
+    scale: str | sp.Expr = 1,
+) -> ApproximationCheck:
+    parsed = parse_polynomial(polynomial)
+    scale_expr = parse_scalar_expression(scale)
+    scale_value = complex(sp.N(scale_expr, 50))
+    coeffs = _complex_polynomial_coefficients(parsed)
+    derivative_coeffs = _differentiate_coefficients(coeffs)
+    polynomial_lipschitz = _max_abs_polynomial_on_interval(derivative_coeffs)
+    target_lipschitz = abs(scale_value * tau)
+    lipschitz_sum = polynomial_lipschitz + target_lipschitz
+    spacing_bound = epsilon / lipschitz_sum if lipschitz_sum > 0 else 2.0
+    intervals = max(1, math.ceil(2.0 / spacing_bound))
+    spacing = 2.0 / intervals
+
+    max_error = -1.0
+    worst_x = -1.0
+    for index in range(intervals + 1):
+        point = -1.0 + index * spacing
+        actual = _eval_complex_polynomial(coeffs, point)
+        expected = scale_value * cmath.exp(-1j * point * tau)
+        error = abs(actual - expected)
+        if error > max_error:
+            max_error = error
+            worst_x = point
+
+    return ApproximationCheck(
+        tau=tau,
+        epsilon=epsilon,
+        scale=scale_expr,
+        polynomial_lipschitz=polynomial_lipschitz,
+        target_lipschitz=target_lipschitz,
+        spacing=spacing,
+        num_grid_points=intervals + 1,
+        max_grid_error=max_error,
+        worst_x=worst_x,
+    )
+
+
 def normalize_qsp_expression(expr: WordExpr, *, hermitian_base: bool = False) -> WordExpr:
     normalized = eliminate(expr)
     if hermitian_base:
@@ -428,6 +543,12 @@ def parse_polynomial(polynomial: str | sp.Expr) -> sp.Expr:
     return sp.expand(parsed)
 
 
+def parse_scalar_expression(value: str | sp.Expr) -> sp.Expr:
+    if isinstance(value, str):
+        return sp.sympify(value.replace("^", "**"), locals={"pi": sp.pi, "I": sp.I, "i": sp.I})
+    return sp.sympify(value)
+
+
 def eval_polynomial_on_pauliop(polynomial: str | sp.Expr, base: OpExpr) -> OpExpr:
     x = sp.Symbol("x")
     parsed = parse_polynomial(polynomial)
@@ -443,6 +564,86 @@ def eval_polynomial_on_pauliop(polynomial: str | sp.Expr, base: OpExpr) -> OpExp
                 powers[exponent] = current
         result += powers[degree].scale(coeff)
     return result
+
+
+def _complex_polynomial_coefficients(polynomial: str | sp.Expr) -> list[complex]:
+    x = sp.Symbol("x")
+    poly = sp.Poly(parse_polynomial(polynomial), x)
+    if poly.is_zero:
+        return [0j]
+    coeffs = [0j] * (poly.degree() + 1)
+    for (degree,), coeff in poly.terms():
+        coeffs[degree] = complex(sp.N(coeff, 50))
+    return coeffs
+
+
+def _differentiate_coefficients(coeffs: Sequence[complex]) -> list[complex]:
+    if len(coeffs) <= 1:
+        return [0j]
+    return [degree * coeffs[degree] for degree in range(1, len(coeffs))]
+
+
+def _max_abs_polynomial_on_interval(coeffs: Sequence[complex]) -> float:
+    if not coeffs or all(abs(coeff) == 0 for coeff in coeffs):
+        return 0.0
+
+    candidates = {-1.0, 1.0}
+    stationary_coeffs = _differentiate_abs_square_coefficients(coeffs)
+    if any(abs(coeff) > 0 for coeff in stationary_coeffs):
+        roots = _real_roots_in_unit_interval(stationary_coeffs)
+        candidates.update(roots or _sample_max_candidates(coeffs))
+    else:
+        candidates.add(0.0)
+
+    return max(abs(_eval_complex_polynomial(coeffs, point)) for point in candidates)
+
+
+def _differentiate_abs_square_coefficients(coeffs: Sequence[complex]) -> list[complex]:
+    abs_square = [0j] * (2 * len(coeffs) - 1)
+    for left_degree, left_coeff in enumerate(coeffs):
+        for right_degree, right_coeff in enumerate(coeffs):
+            abs_square[left_degree + right_degree] += left_coeff * right_coeff.conjugate()
+    if len(abs_square) <= 1:
+        return [0j]
+    return [degree * abs_square[degree] for degree in range(1, len(abs_square))]
+
+
+def _real_roots_in_unit_interval(coeffs: Sequence[complex]) -> list[float]:
+    x = sp.Symbol("x")
+    expr = sp.Integer(0)
+    for degree, coeff in enumerate(coeffs):
+        if abs(coeff) > 0:
+            expr += sp.Float(coeff.real, 50) * x**degree
+    if expr == 0:
+        return []
+
+    try:
+        roots = sp.nroots(sp.Poly(expr, x), n=30, maxsteps=200)
+    except Exception:
+        return []
+
+    points: list[float] = []
+    for root in roots:
+        value = complex(root)
+        if abs(value.imag) <= 1e-10 and -1.0 <= value.real <= 1.0:
+            points.append(float(value.real))
+    return points
+
+
+def _sample_max_candidates(coeffs: Sequence[complex]) -> list[float]:
+    sample_count = 4096
+    best_index = max(
+        range(sample_count + 1),
+        key=lambda index: abs(_eval_complex_polynomial(coeffs, -1.0 + 2.0 * index / sample_count)),
+    )
+    return [-1.0 + 2.0 * best_index / sample_count]
+
+
+def _eval_complex_polynomial(coeffs: Sequence[complex], point: float) -> complex:
+    value = 0j
+    for coeff in reversed(coeffs):
+        value = value * point + coeff
+    return value
 
 
 def _format_polynomial(polynomial: sp.Expr) -> str:
@@ -540,11 +741,51 @@ def _parse_qubit_arg(value: str | int) -> int:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Symbolically verify a block encoding with one or more ancillas.")
+    parser = argparse.ArgumentParser(
+        description="Symbolically verify one route: block encoding, Hamiltonian simulation, or general QSP."
+    )
     parser.add_argument("qasm_path", type=Path)
     parser.add_argument("--expected", help='Expected top-left block, for example "(X0 X1 + Z0 Z1)/2".')
     parser.add_argument("--base", help='Base block for QSP/QSVT polynomial checks, for example "(X + Z)/2".')
     parser.add_argument("--expected-polynomial", help='Expected QSP polynomial in x, for example "4*x^3 - 3*x".')
+    parser.add_argument(
+        "--target-exp-tau",
+        type=float,
+        dest="target_exp_tau",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--target-exp-epsilon",
+        type=float,
+        dest="target_exp_epsilon",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--target-exp-scale",
+        default="1",
+        dest="target_exp_scale",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--hamsim-tau",
+        type=float,
+        dest="target_exp_tau",
+        default=argparse.SUPPRESS,
+        help="Hamiltonian-simulation route: simulation time t.",
+    )
+    parser.add_argument(
+        "--hamsim-epsilon",
+        type=float,
+        dest="target_exp_epsilon",
+        default=argparse.SUPPRESS,
+        help="Hamiltonian-simulation route: approximation tolerance.",
+    )
+    parser.add_argument(
+        "--hamsim-scale",
+        dest="target_exp_scale",
+        default=argparse.SUPPRESS,
+        help="Hamiltonian-simulation route: scalar multiplier for exp(-i*x*t).",
+    )
     parser.add_argument("--hermitian-base", action="store_true", help="Rewrite Hd atoms to H before QSP polynomial evaluation.")
     parser.add_argument(
         "--compare-polynomial-only",
@@ -577,6 +818,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         expected_polynomial=args.expected_polynomial,
         hermitian_base=args.hermitian_base,
         compare_polynomial_only=args.compare_polynomial_only,
+        target_exp_tau=args.target_exp_tau,
+        target_exp_epsilon=args.target_exp_epsilon,
+        target_exp_scale=args.target_exp_scale,
         tolerance=args.tolerance,
         profile_gates=args.profile_gates,
     )

@@ -449,3 +449,51 @@ def test_qsp_polynomial_only_check_does_not_require_base():
     assert result.qsp_polynomial_only is True
     assert result.qsp_actual is None
     assert result.qsp_expected is None
+
+
+def test_qsp_target_exp_check_can_drive_status_without_expected_polynomial():
+    path = Path(__file__).parents[1] / "examples" / "uhdg_uh_opaque.qasm"
+    result = verify_qasm_file(
+        path,
+        ancillas=(0, 1),
+        systems=(2,),
+        target_exp_tau=0.0,
+        target_exp_epsilon=1e-8,
+        hermitian_base=True,
+    )
+
+    assert result.status == PASS
+    assert result.qsp_polynomial == 1
+    assert result.qsp_approximation is not None
+    assert result.qsp_approximation.success is True
+
+
+def test_qsp_target_exp_check_fails_when_grid_error_exceeds_half_epsilon():
+    path = Path(__file__).parents[1] / "examples" / "qsp_t3_opaque.qasm"
+    result = verify_qasm_file(
+        path,
+        ancillas=(0, 1),
+        systems=(2,),
+        target_exp_tau=0.0,
+        target_exp_epsilon=0.1,
+        hermitian_base=True,
+    )
+
+    assert result.status == FAIL
+    assert result.qsp_approximation is not None
+    assert result.qsp_approximation.max_grid_error > 0.05
+
+
+def test_verification_routes_are_mutually_exclusive():
+    path = Path(__file__).parents[1] / "examples" / "qsp_t3_opaque.qasm"
+
+    with pytest.raises(ValueError, match="Choose exactly one verification route"):
+        verify_qasm_file(
+            path,
+            ancillas=(0, 1),
+            systems=(2,),
+            expected_polynomial="4*x^3 - 3*x",
+            target_exp_tau=0.0,
+            target_exp_epsilon=0.1,
+            hermitian_base=True,
+        )

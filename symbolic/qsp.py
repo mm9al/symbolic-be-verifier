@@ -583,12 +583,7 @@ def full_hamsim_verification_command(
 ) -> list[str]:
     block_ancillas = _normalize_qubit_list(block_ancillas, label="block ancilla")
     system_qubits = _normalize_qubit_list(system_qubits, label="system qubit")
-    polynomial = hamsim_exp_polynomial_expr(
-        record["cos"]["monomial_coefficients"],
-        record["sin"]["monomial_coefficients"],
-        precision=precision,
-        scale=0.5,
-    )
+    target_scale = clean_float(0.5 * record["scale"])
     return [
         ".venv/bin/python",
         "-m",
@@ -601,10 +596,13 @@ def full_hamsim_verification_command(
         *block_ancillas,
         "--systems",
         *system_qubits,
-        "--expected-polynomial",
-        polynomial,
+        "--hamsim-tau",
+        format_number(record["tau"], precision),
+        "--hamsim-epsilon",
+        format_number(record["epsilon"], precision),
+        "--hamsim-scale",
+        format_number(target_scale, precision),
         "--hermitian-base",
-        "--compare-polynomial-only",
     ]
 
 

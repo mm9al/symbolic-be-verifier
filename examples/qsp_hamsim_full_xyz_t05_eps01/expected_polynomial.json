@@ -32,10 +32,12 @@
     "q[3]",
     "--systems",
     "q[4]",
-    "--base",
-    "(X + Y + Z)/3",
-    "--expected-polynomial",
-    "0.24991946353954456 - 0.12497982382931781*i*x - 0.030604023458682638*x^2 + 0.005127459989174488*i*x^3",
+    "--hamsim-tau",
+    "0.5",
+    "--hamsim-epsilon",
+    "0.1",
+    "--hamsim-scale",
+    "0.25",
     "--hermitian-base",
     "--result-only"
   ]

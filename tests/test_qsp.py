@@ -314,6 +314,19 @@ def test_full_hamsim_generated_qasm_verifies_for_multiple_block_ancillas(tmp_pat
 
     assert result.status == PASS
     assert polynomial_close(result.qsp_polynomial, FULL_HAMSIM_DEG3_POLYNOMIAL)
+    approximate_result = verify_qasm_file(
+        qasm_path,
+        ancillas=(0, 1, 2, 3, 4),
+        systems=(5,),
+        target_exp_tau=0.5,
+        target_exp_epsilon=1e-3,
+        target_exp_scale="0.25",
+        hermitian_base=True,
+    )
+
+    assert approximate_result.status == PASS
+    assert approximate_result.qsp_approximation is not None
+    assert approximate_result.qsp_approximation.max_grid_error <= 5e-4
     _verify_qasm_dense_on_base(
         qasm_path,
         ancillas=(0, 1, 2, 3, 4),
