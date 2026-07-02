@@ -19,9 +19,8 @@ sys.path.insert(0, str(ROOT))
 
 from symbolic.expr import OpExpr
 
-DEFAULT_MIN_SIZE = 2
-DEFAULT_MAX_SIZE = 128
-DEFAULT_BLOCK_ENCODING_SIZES = tuple(range(DEFAULT_MIN_SIZE, DEFAULT_MAX_SIZE))
+DEFAULT_BLOCK_ENCODING_SIZES = (2, 3, 4, 5, 6, 7, 8, 9, 10, 16, 17, 32, 33, 64, 65, 128, 256)
+DEFAULT_BLOCK_ENCODING_SIZE_SPEC = ",".join(str(size) for size in DEFAULT_BLOCK_ENCODING_SIZES)
 
 
 @dataclass(frozen=True)
@@ -497,7 +496,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate RQ1 block-encoding benchmark QASM files.")
     parser.add_argument(
         "--sizes",
-        default=f"{DEFAULT_MIN_SIZE}..{DEFAULT_MAX_SIZE}",
+        default=DEFAULT_BLOCK_ENCODING_SIZE_SPEC,
         help='Comma-separated sizes or ranges, e.g. "2..128" or "2,3,5,8".',
     )
     parser.add_argument("--out-dir", type=Path, default=ROOT / "benchmarks" / "block_encoding")

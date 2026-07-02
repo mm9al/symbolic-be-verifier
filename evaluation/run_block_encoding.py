@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = ROOT / "benchmarks" / "block_encoding" / "manifest.csv"
 RESULTS_DIR = ROOT / "evaluation" / "results"
 RESULTS_PATH = RESULTS_DIR / "block_encoding_results.csv"
-DEFAULT_TIMEOUT_SEC = 300.0
+DEFAULT_TIMEOUT_SEC = 1800.0
 
 sys.path.insert(0, str(ROOT))
 
