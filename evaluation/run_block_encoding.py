@@ -18,6 +18,7 @@ DEFAULT_TIMEOUT_SEC = 1800.0
 
 sys.path.insert(0, str(ROOT))
 
+from symbolic.qasm_parser import parse_qasm_file  # noqa: E402
 from symbolic.verify import gate_profile_fieldnames, gate_profile_rows, verify_qasm_file  # noqa: E402
 
 
@@ -169,6 +170,7 @@ def _metadata(row: dict[str, str]) -> dict[str, str]:
         "selector_ancillas": row["selector_ancillas"],
         "n_ancilla": row["n_ancilla"],
         "max_locality": row["max_locality"],
+        "gate_count": str(_gate_count(row)),
         "qasm_path": row["qasm_path"],
     }
 
@@ -209,6 +211,7 @@ def _fieldnames() -> list[str]:
         "selector_ancillas",
         "n_ancilla",
         "max_locality",
+        "gate_count",
         "qasm_path",
         "runtime_sec",
         "tracemalloc_peak_mb",
@@ -221,6 +224,10 @@ def _fieldnames() -> list[str]:
 
 def _parse_int_list(text: str) -> tuple[int, ...]:
     return tuple(int(piece) for piece in text.split())
+
+
+def _gate_count(row: dict[str, str]) -> int:
+    return len(parse_qasm_file(ROOT / row["qasm_path"]))
 
 
 def _bytes_to_mib(value: int) -> float:

@@ -26,6 +26,7 @@ PASS_UP_TO_SCALE = "PASS_UP_TO_SCALE"
 FAIL = "FAIL"
 FAIL_GARBAGE = "FAIL_GARBAGE"
 DEFAULT_TOLERANCE = 1e-8
+DEFAULT_MAX_APPROXIMATION_GRID_POINTS = 10_000_000
 
 
 @dataclass(frozen=True)
@@ -53,7 +54,8 @@ class ApproximationCheck:
     tau: float
     epsilon: float
     scale: sp.Expr
-    polynomial_lipschitz: float
+    polynomial_degree: int
+    polynomial_derivative_bound: float
     target_lipschitz: float
     spacing: float
     num_grid_points: int
@@ -63,6 +65,10 @@ class ApproximationCheck:
     @property
     def success(self) -> bool:
         return self.max_grid_error <= self.epsilon / 2
+
+    @property
+    def polynomial_lipschitz(self) -> float:
+        return self.polynomial_derivative_bound
 
 
 @dataclass(frozen=True)
@@ -192,11 +198,13 @@ def verify_qasm_file(
     profile_gates: bool = False,
     base: str | OpExpr | None = None,
     expected_polynomial: str | sp.Expr | None = None,
+    extract_qsp_polynomial: bool = False,
     hermitian_base: bool = False,
     compare_polynomial_only: bool = False,
     target_exp_tau: float | None = None,
     target_exp_epsilon: float | None = None,
     target_exp_scale: str | sp.Expr = 1,
+    max_approx_grid_points: int | None = DEFAULT_MAX_APPROXIMATION_GRID_POINTS,
     tolerance: float = DEFAULT_TOLERANCE,
 ) -> VerificationResult:
     if (target_exp_tau is None) != (target_exp_epsilon is None):
@@ -220,6 +228,7 @@ def verify_qasm_file(
     expression_kind = (
         "word"
         if expected_polynomial is not None
+        or extract_qsp_polynomial
         or target_exp_tau is not None
         or target_exp_epsilon is not None
         or any(_is_qsp_word_gate(gate.name) for gate in gates)
@@ -247,7 +256,7 @@ def verify_qasm_file(
             raise ValueError("QSP word mode requires word-mode branch values")
         qsp_normalized = normalize_qsp_expression(top_left, hermitian_base=hermitian_base)
 
-    needs_qsp_polynomial = expected_polynomial is not None or target_exp_tau is not None
+    needs_qsp_polynomial = expected_polynomial is not None or target_exp_tau is not None or extract_qsp_polynomial
     if needs_qsp_polynomial:
         if expected_polynomial is not None and base is None and not compare_polynomial_only:
             raise ValueError("--base is required when --expected-polynomial is set")
@@ -273,10 +282,10 @@ def verify_qasm_file(
 
     if target_exp_tau is not None and qsp_status != FAIL_GARBAGE:
         qsp_approximation = verify_polynomial_approximates_exp(
-            qsp_polynomial,
+            rescale_polynomial_for_target(qsp_polynomial, target_exp_scale),
             tau=target_exp_tau,
             epsilon=target_exp_epsilon,
-            scale=target_exp_scale,
+            max_grid_points=max_approx_grid_points,
         )
         check_statuses.append(PASS if qsp_approximation.success else FAIL)
 
@@ -354,7 +363,8 @@ def format_result(result: VerificationResult, *, show_trace: bool = False) -> st
                 f"{_format_scalar(check.scale)} * exp(-i*x*{check.tau:.12g})"
             )
             lines.append(f"Approximation epsilon = {check.epsilon:.12g}")
-            lines.append(f"Approximation L = {check.polynomial_lipschitz:.12g}")
+            lines.append(f"Approximation polynomial degree = {check.polynomial_degree}")
+            lines.append(f"Approximation polynomial derivative bound = {check.polynomial_derivative_bound:.12g}")
             lines.append(f"Approximation target Lipschitz = {check.target_lipschitz:.12g}")
             lines.append(f"Approximation grid spacing = {check.spacing:.12g}")
             lines.append(f"Approximation grid points = {check.num_grid_points}")
@@ -475,23 +485,35 @@ def verify_polynomial_approximates_exp(
     tau: float,
     epsilon: float,
     scale: str | sp.Expr = 1,
+    max_grid_points: int | None = DEFAULT_MAX_APPROXIMATION_GRID_POINTS,
 ) -> ApproximationCheck:
+    if epsilon <= 0:
+        raise ValueError("epsilon must be positive")
     parsed = parse_polynomial(polynomial)
     scale_expr = parse_scalar_expression(scale)
     scale_value = complex(sp.N(scale_expr, 50))
     coeffs = _complex_polynomial_coefficients(parsed)
-    derivative_coeffs = _differentiate_coefficients(coeffs)
-    polynomial_lipschitz = _max_abs_polynomial_on_interval(derivative_coeffs)
+    polynomial_degree = len(coeffs) - 1
+    polynomial_derivative_bound = float(polynomial_degree)
     target_lipschitz = abs(scale_value * tau)
-    lipschitz_sum = polynomial_lipschitz + target_lipschitz
-    spacing_bound = epsilon / lipschitz_sum if lipschitz_sum > 0 else 2.0
-    intervals = max(1, math.ceil(2.0 / spacing_bound))
-    spacing = 2.0 / intervals
+    intervals = max(1, math.ceil(math.pi * (target_lipschitz + polynomial_derivative_bound) / epsilon))
+    num_grid_points = intervals + 1
+    if max_grid_points is not None:
+        if max_grid_points < 2:
+            raise ValueError("max_grid_points must be at least 2, or None to disable the guard")
+        if num_grid_points > max_grid_points:
+            raise ValueError(
+                "Approximation grid requires "
+                f"{num_grid_points} Chebyshev points by M >= pi*(|scale|*tau + d)/epsilon "
+                f"(degree={polynomial_degree}, target_lipschitz={target_lipschitz:.12g}, epsilon={epsilon:.12g}); "
+                f"max_grid_points is {max_grid_points}"
+            )
+    spacing = math.pi / intervals
 
     max_error = -1.0
     worst_x = -1.0
     for index in range(intervals + 1):
-        point = -1.0 + index * spacing
+        point = math.cos(index * math.pi / intervals)
         actual = _eval_complex_polynomial(coeffs, point)
         expected = scale_value * cmath.exp(-1j * point * tau)
         error = abs(actual - expected)
@@ -503,10 +525,11 @@ def verify_polynomial_approximates_exp(
         tau=tau,
         epsilon=epsilon,
         scale=scale_expr,
-        polynomial_lipschitz=polynomial_lipschitz,
+        polynomial_degree=polynomial_degree,
+        polynomial_derivative_bound=polynomial_derivative_bound,
         target_lipschitz=target_lipschitz,
         spacing=spacing,
-        num_grid_points=intervals + 1,
+        num_grid_points=num_grid_points,
         max_grid_error=max_error,
         worst_x=worst_x,
     )
@@ -547,6 +570,14 @@ def parse_scalar_expression(value: str | sp.Expr) -> sp.Expr:
     if isinstance(value, str):
         return sp.sympify(value.replace("^", "**"), locals={"pi": sp.pi, "I": sp.I, "i": sp.I})
     return sp.sympify(value)
+
+
+def rescale_polynomial_for_target(polynomial: str | sp.Expr, scale: str | sp.Expr) -> sp.Expr:
+    scale_expr = parse_scalar_expression(scale)
+    scale_value = abs(complex(sp.N(scale_expr, 50)))
+    if scale_value == 0:
+        raise ValueError("target_exp_scale must be nonzero for rescaled approximation checking")
+    return sp.expand(parse_polynomial(polynomial) / scale_expr)
 
 
 def eval_polynomial_on_pauliop(polynomial: str | sp.Expr, base: OpExpr) -> OpExpr:
@@ -786,6 +817,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         default=argparse.SUPPRESS,
         help="Hamiltonian-simulation route: scalar multiplier for exp(-i*x*t).",
     )
+    parser.add_argument(
+        "--max-approx-grid-points",
+        type=int,
+        default=DEFAULT_MAX_APPROXIMATION_GRID_POINTS,
+        help=(
+            "Fail fast if the Hamiltonian-simulation approximation grid would exceed this many points. "
+            "Use 0 to disable."
+        ),
+    )
     parser.add_argument("--hermitian-base", action="store_true", help="Rewrite Hd atoms to H before QSP polynomial evaluation.")
     parser.add_argument(
         "--compare-polynomial-only",
@@ -805,6 +845,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     ancillas = tuple(_parse_qubit_arg(value) for value in args.ancillas) if args.ancillas is not None else None
     systems = tuple(_parse_qubit_arg(value) for value in args.systems) if args.systems is not None else None
+    max_approx_grid_points = None if args.max_approx_grid_points == 0 else args.max_approx_grid_points
 
     result = verify_qasm_file(
         args.qasm_path,
@@ -821,6 +862,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         target_exp_tau=args.target_exp_tau,
         target_exp_epsilon=args.target_exp_epsilon,
         target_exp_scale=args.target_exp_scale,
+        max_approx_grid_points=max_approx_grid_points,
         tolerance=args.tolerance,
         profile_gates=args.profile_gates,
     )

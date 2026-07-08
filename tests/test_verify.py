@@ -18,6 +18,7 @@ from symbolic.verify import (
     polynomial_close,
     proportional_scale,
     scalar_close,
+    verify_polynomial_approximates_exp,
     verify_qasm_file,
 )
 from symbolic.word_expr import WordExpr
@@ -451,6 +452,21 @@ def test_qsp_polynomial_only_check_does_not_require_base():
     assert result.qsp_expected is None
 
 
+def test_qsp_polynomial_can_be_extracted_without_verification_route():
+    path = Path(__file__).parents[1] / "examples" / "qsp_t3_opaque.qasm"
+    result = verify_qasm_file(
+        path,
+        ancillas=(0, 1),
+        systems=(2,),
+        hermitian_base=True,
+        extract_qsp_polynomial=True,
+    )
+
+    assert result.status is None
+    assert result.success is None
+    assert sp.expand(result.qsp_polynomial - (4 * sp.Symbol("x") ** 3 - 3 * sp.Symbol("x"))) == 0
+
+
 def test_qsp_target_exp_check_can_drive_status_without_expected_polynomial():
     path = Path(__file__).parents[1] / "examples" / "uhdg_uh_opaque.qasm"
     result = verify_qasm_file(
@@ -466,6 +482,32 @@ def test_qsp_target_exp_check_can_drive_status_without_expected_polynomial():
     assert result.qsp_polynomial == 1
     assert result.qsp_approximation is not None
     assert result.qsp_approximation.success is True
+
+
+def test_qsp_target_exp_grid_uses_markov_degree_bound():
+    check = verify_polynomial_approximates_exp(
+        "1 - i*x + 0.5*x^3",
+        tau=0.5,
+        epsilon=0.1,
+        scale="0.25",
+    )
+
+    assert check.polynomial_degree == 3
+    assert check.polynomial_derivative_bound == 3
+    assert check.target_lipschitz == pytest.approx(0.125)
+    assert check.num_grid_points == 100
+    assert check.spacing == pytest.approx(float(sp.pi / 99))
+
+
+def test_qsp_target_exp_grid_guard_fails_fast():
+    with pytest.raises(ValueError, match="Approximation grid requires 100 Chebyshev points"):
+        verify_polynomial_approximates_exp(
+            "1 - i*x + 0.5*x^3",
+            tau=0.5,
+            epsilon=0.1,
+            scale="0.25",
+            max_grid_points=99,
+        )
 
 
 def test_qsp_target_exp_check_fails_when_grid_error_exceeds_half_epsilon():

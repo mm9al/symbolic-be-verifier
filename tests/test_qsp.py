@@ -326,6 +326,8 @@ def test_full_hamsim_generated_qasm_verifies_for_multiple_block_ancillas(tmp_pat
 
     assert approximate_result.status == PASS
     assert approximate_result.qsp_approximation is not None
+    assert approximate_result.qsp_approximation.epsilon == pytest.approx(1e-3)
+    assert approximate_result.qsp_approximation.num_grid_points == 10997
     assert approximate_result.qsp_approximation.max_grid_error <= 5e-4
     _verify_qasm_dense_on_base(
         qasm_path,

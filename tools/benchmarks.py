@@ -18,9 +18,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from symbolic.expr import OpExpr
+from symbolic.qsp import example_tag, full_hamsim_qasm_file, generate_full_hamsim_record, hamsim_exp_polynomial_expr
 
 DEFAULT_BLOCK_ENCODING_SIZES = (2, 3, 4, 5, 6, 7, 8, 9, 10, 16, 17, 32, 33, 64, 65, 128, 256)
 DEFAULT_BLOCK_ENCODING_SIZE_SPEC = ",".join(str(size) for size in DEFAULT_BLOCK_ENCODING_SIZES)
+DEFAULT_HAMSIM_T_VALUES = (0.1, 0.5, 1.0, 2.0, 4.0)
+DEFAULT_HAMSIM_EPSILONS = (1e-1, 1e-4, 1e-6, 1e-10, 1e-12)
+DEFAULT_HAMSIM_PRECISION = 17
 
 
 @dataclass(frozen=True)
@@ -103,6 +107,99 @@ class HamiltonianBenchmark:
         }
 
 
+@dataclass(frozen=True)
+class HamsimBenchmark:
+    benchmark_id: str
+    axis: str
+    tau: float
+    epsilon: float
+    block_ancilla_count: int
+    record: dict
+    precision: int = DEFAULT_HAMSIM_PRECISION
+
+    @property
+    def degree(self) -> int:
+        return int(self.record["degree"])
+
+    @property
+    def cos_degree(self) -> int:
+        return int(self.record["cos"]["degree"])
+
+    @property
+    def sin_degree(self) -> int:
+        return int(self.record["sin"]["degree"])
+
+    @property
+    def n_ancilla(self) -> int:
+        return self.block_ancilla_count + 3
+
+    @property
+    def n_system(self) -> int:
+        return 1
+
+    @property
+    def selector_qubit(self) -> str:
+        return "q[0]"
+
+    @property
+    def component_selector_qubit(self) -> str:
+        return "q[1]"
+
+    @property
+    def phase_qubit(self) -> str:
+        return "q[2]"
+
+    @property
+    def block_ancillas(self) -> list[str]:
+        return [f"q[{index}]" for index in range(3, 3 + self.block_ancilla_count)]
+
+    @property
+    def system_qubits(self) -> list[str]:
+        return [f"q[{3 + self.block_ancilla_count}]"]
+
+    @property
+    def ancillas(self) -> tuple[int, ...]:
+        return tuple(range(self.n_ancilla))
+
+    @property
+    def systems(self) -> tuple[int, ...]:
+        return (self.n_ancilla,)
+
+    @property
+    def target_scale(self) -> float:
+        return 0.5 * float(self.record["scale"])
+
+    @property
+    def expected_polynomial(self) -> str:
+        return hamsim_exp_polynomial_expr(
+            self.record["cos"]["monomial_coefficients"],
+            self.record["sin"]["monomial_coefficients"],
+            precision=self.precision,
+            scale=0.5,
+        )
+
+    def manifest_row(self, qasm_path: Path) -> dict[str, str]:
+        return {
+            "benchmark_id": self.benchmark_id,
+            "rq": "RQ2",
+            "stage": "hamsim",
+            "axis": self.axis,
+            "tau": _format_float(self.tau),
+            "epsilon": _format_float(self.epsilon),
+            "degree": str(self.degree),
+            "cos_degree": str(self.cos_degree),
+            "sin_degree": str(self.sin_degree),
+            "uh_ancillas": str(self.block_ancilla_count),
+            "n_ancilla": str(self.n_ancilla),
+            "n_system": str(self.n_system),
+            "target_scale": _format_float(self.target_scale),
+            "ancillas": " ".join(str(index) for index in self.ancillas),
+            "systems": " ".join(str(index) for index in self.systems),
+            "qasm_path": _format_path(qasm_path),
+            "expected_polynomial": self.expected_polynomial,
+        }
+
+
 def make_hamiltonian(model: str, n: int, *, graph: str | None = None) -> HamiltonianBenchmark:
     model = model.lower()
     if model == "ising":
@@ -141,6 +238,75 @@ def block_encoding_suite(sizes: Sequence[int] = DEFAULT_BLOCK_ENCODING_SIZES) ->
         for n in sizes:
             benchmarks.append(make_hamiltonian(model, n))
     return benchmarks
+
+
+def hamsim_suite(
+    *,
+    t_values: Sequence[float] = DEFAULT_HAMSIM_T_VALUES,
+    epsilons: Sequence[float] = DEFAULT_HAMSIM_EPSILONS,
+    precision: int = DEFAULT_HAMSIM_PRECISION,
+) -> list[HamsimBenchmark]:
+    benchmarks: list[HamsimBenchmark] = []
+    seen: set[tuple[str, float, float, int]] = set()
+
+    for tau in t_values:
+        benchmarks.append(_make_hamsim_benchmark("vary_t", tau=tau, epsilon=1e-4, m=1, precision=precision))
+        seen.add(("vary_t", tau, 1e-4, 1))
+
+    for epsilon in epsilons:
+        key = ("vary_epsilon", 0.5, epsilon, 1)
+        if key not in seen:
+            benchmarks.append(_make_hamsim_benchmark("vary_epsilon", tau=0.5, epsilon=epsilon, m=1, precision=precision))
+            seen.add(key)
+
+    return benchmarks
+
+
+def write_hamsim_qasm(benchmark: HamsimBenchmark, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        full_hamsim_qasm_file(
+            benchmark.record,
+            precision=benchmark.precision,
+            selector_qubit=benchmark.selector_qubit,
+            component_selector_qubit=benchmark.component_selector_qubit,
+            phase_qubit=benchmark.phase_qubit,
+            block_ancillas=benchmark.block_ancillas,
+            system_qubits=benchmark.system_qubits,
+            signal_gate="UH",
+            signal_gate_dagger="UHdg",
+            controlled_signal_gate="cUH",
+            controlled_signal_gate_dagger="cUHdg",
+        ),
+        encoding="utf-8",
+    )
+
+
+def write_hamsim_manifest(rows: list[dict[str, str]], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "benchmark_id",
+        "rq",
+        "stage",
+        "axis",
+        "tau",
+        "epsilon",
+        "degree",
+        "cos_degree",
+        "sin_degree",
+        "uh_ancillas",
+        "n_ancilla",
+        "n_system",
+        "target_scale",
+        "ancillas",
+        "systems",
+        "qasm_path",
+        "expected_polynomial",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def normalize_terms(terms: Sequence[PauliTerm]) -> tuple[list[PauliTerm], Fraction]:
@@ -458,6 +624,29 @@ def _fraction(value: int | float | Fraction) -> Fraction:
     return Fraction(value)
 
 
+def _make_hamsim_benchmark(axis: str, *, tau: float, epsilon: float, m: int, precision: int) -> HamsimBenchmark:
+    if m < 1:
+        raise ValueError("Hamiltonian-simulation U_H ancilla count must be positive")
+    record = generate_full_hamsim_record(
+        tau=tau,
+        epsilon=epsilon,
+        ensure_bounded=True,
+        method="sym_qsp",
+        signal_operator="Wx",
+    )
+    tag = example_tag(tau, epsilon)
+    benchmark_id = f"hamsim_{axis}_{tag}_m{m}_deg{record['degree']}"
+    return HamsimBenchmark(
+        benchmark_id=benchmark_id,
+        axis=axis,
+        tau=tau,
+        epsilon=epsilon,
+        block_ancilla_count=m,
+        record=record,
+        precision=precision,
+    )
+
+
 def _sympy_fraction(value: Fraction) -> sp.Rational:
     return sp.Rational(value.numerator, value.denominator)
 
@@ -466,6 +655,10 @@ def _format_fraction(value: Fraction) -> str:
     if value.denominator == 1:
         return str(value.numerator)
     return f"{value.numerator}/{value.denominator}"
+
+
+def _format_float(value: float) -> str:
+    return f"{value:.17g}"
 
 
 def _format_path(path: Path) -> str:
@@ -516,6 +709,31 @@ def main(argv: Sequence[str] | None = None) -> int:
     write_manifest(rows, manifest_path)
 
     print(f"Wrote {len(rows)} block-encoding benchmarks to {_format_path(out_dir)}")
+    print(f"Wrote manifest to {_format_path(manifest_path)}")
+    return 0
+
+
+def hamsim_main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Generate RQ2 Hamiltonian-simulation QSP benchmark QASM files.")
+    parser.add_argument("--out-dir", type=Path, default=ROOT / "benchmarks" / "hamsim")
+    parser.add_argument("--precision", type=int, default=DEFAULT_HAMSIM_PRECISION)
+    args = parser.parse_args(argv)
+
+    out_dir = args.out_dir
+    generated_dir = out_dir / "generated"
+    manifest_path = out_dir / "manifest.csv"
+    if generated_dir.exists():
+        shutil.rmtree(generated_dir)
+
+    rows = []
+    benchmarks = hamsim_suite(precision=args.precision)
+    for benchmark in benchmarks:
+        qasm_path = generated_dir / benchmark.axis / f"{benchmark.benchmark_id}.qasm"
+        write_hamsim_qasm(benchmark, qasm_path)
+        rows.append(benchmark.manifest_row(qasm_path))
+    write_hamsim_manifest(rows, manifest_path)
+
+    print(f"Wrote {len(rows)} Hamiltonian-simulation benchmarks to {_format_path(out_dir)}")
     print(f"Wrote manifest to {_format_path(manifest_path)}")
     return 0
 
