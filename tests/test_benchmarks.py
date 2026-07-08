@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from symbolic.verify import PASS, verify_qasm_file
+from symbolic.verify import PASS_EXACT, verify_qasm_file
 from tools.benchmarks import hamsim_suite, make_hamiltonian, write_block_encoding_qasm
 
 
@@ -20,7 +20,7 @@ def test_ising_block_encoding_generator_verifies(tmp_path: Path):
         systems=benchmark.systems,
     )
 
-    assert result.status == PASS
+    assert result.status == PASS_EXACT
 
 
 def test_maxcut_cycle_block_encoding_generator_verifies_negative_terms(tmp_path: Path):
@@ -38,7 +38,7 @@ def test_maxcut_cycle_block_encoding_generator_verifies_negative_terms(tmp_path:
         systems=benchmark.systems,
     )
 
-    assert result.status == PASS
+    assert result.status == PASS_EXACT
 
 
 def test_heisenberg_block_encoding_generator_verifies_y_terms(tmp_path: Path):
@@ -53,7 +53,7 @@ def test_heisenberg_block_encoding_generator_verifies_y_terms(tmp_path: Path):
         systems=benchmark.systems,
     )
 
-    assert result.status == PASS
+    assert result.status == PASS_EXACT
 
 
 def test_hamsim_suite_pins_the_intended_axis_variables():

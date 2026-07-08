@@ -22,10 +22,12 @@ from .word_expr import GARBAGE_ATOMS, WordExpr, eliminate
 
 
 PASS = "PASS"
+PASS_EXACT = "PASS_EXACT"
 PASS_UP_TO_SCALE = "PASS_UP_TO_SCALE"
 FAIL = "FAIL"
 FAIL_GARBAGE = "FAIL_GARBAGE"
 DEFAULT_TOLERANCE = 1e-8
+DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE = 1e-12
 DEFAULT_MAX_APPROXIMATION_GRID_POINTS = 10_000_000
 
 
@@ -72,6 +74,23 @@ class ApproximationCheck:
 
 
 @dataclass(frozen=True)
+class BlockEncodingProportionalityCheck:
+    epsilon: float
+    alpha: float
+    projection_length: float
+    residual_norm: float
+    threshold: float
+    numerical_tolerance: float
+    acceptance_threshold: float
+    coefficient_norm: float
+    target_norm: float
+
+    @property
+    def success(self) -> bool:
+        return self.alpha > 0 and self.residual_norm <= self.acceptance_threshold
+
+
+@dataclass(frozen=True)
 class VerificationResult:
     final_state: BranchState
     trace: Sequence[TraceStep]
@@ -87,6 +106,8 @@ class VerificationResult:
     qsp_approximation: Optional[ApproximationCheck] = None
     qsp_status: Optional[str] = None
     qsp_polynomial_only: bool = False
+    block_encoding_epsilon: Optional[float] = None
+    block_encoding_residual_tolerance: float = DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE
     tolerance: float = DEFAULT_TOLERANCE
 
     @property
@@ -95,7 +116,7 @@ class VerificationResult:
             return self.qsp_status == PASS
         if self.expected is None:
             return None
-        return self.status in {PASS, PASS_UP_TO_SCALE}
+        return self.status in {PASS, PASS_EXACT, PASS_UP_TO_SCALE}
 
     @property
     def status(self) -> Optional[str]:
@@ -106,8 +127,16 @@ class VerificationResult:
         top_left = self.final_state.top_left()
         if not isinstance(top_left, OpExpr):
             return FAIL
+        if self.block_encoding_epsilon is not None:
+            check = block_encoding_proportionality_check(
+                top_left,
+                self.expected,
+                epsilon=self.block_encoding_epsilon,
+                residual_tolerance=self.block_encoding_residual_tolerance,
+            )
+            return PASS if check.success else FAIL
         if pauli_expr_close(top_left, self.expected, tol=self.tolerance):
-            return PASS
+            return PASS_EXACT
         is_proportional, _scale = proportional_scale(top_left, self.expected, tol=self.tolerance)
         if is_proportional:
             return PASS_UP_TO_SCALE
@@ -122,6 +151,18 @@ class VerificationResult:
         if is_proportional:
             return scale
         return None
+
+    @property
+    def block_encoding_check(self) -> Optional[BlockEncodingProportionalityCheck]:
+        top_left = self.final_state.top_left()
+        if self.expected is None or self.block_encoding_epsilon is None or not isinstance(top_left, OpExpr):
+            return None
+        return block_encoding_proportionality_check(
+            top_left,
+            self.expected,
+            epsilon=self.block_encoding_epsilon,
+            residual_tolerance=self.block_encoding_residual_tolerance,
+        )
 
 
 def run_circuit(
@@ -205,12 +246,21 @@ def verify_qasm_file(
     target_exp_epsilon: float | None = None,
     target_exp_scale: str | sp.Expr = 1,
     max_approx_grid_points: int | None = DEFAULT_MAX_APPROXIMATION_GRID_POINTS,
+    block_encoding_epsilon: float | None = None,
+    block_encoding_residual_tolerance: float = DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE,
     tolerance: float = DEFAULT_TOLERANCE,
 ) -> VerificationResult:
     if (target_exp_tau is None) != (target_exp_epsilon is None):
         raise ValueError("--hamsim-tau and --hamsim-epsilon must be set together")
     if target_exp_epsilon is not None and target_exp_epsilon <= 0:
         raise ValueError("--hamsim-epsilon must be positive")
+    if block_encoding_epsilon is not None:
+        if block_encoding_epsilon <= 0:
+            raise ValueError("--block-encoding-epsilon must be positive")
+        if expected is None:
+            raise ValueError("--block-encoding-epsilon requires --expected")
+    if block_encoding_residual_tolerance < 0:
+        raise ValueError("--block-encoding-residual-tolerance must be nonnegative")
     selected_modes = sum(
         (
             expected is not None,
@@ -307,6 +357,8 @@ def verify_qasm_file(
         qsp_approximation=qsp_approximation,
         qsp_status=qsp_status,
         qsp_polynomial_only=compare_polynomial_only,
+        block_encoding_epsilon=block_encoding_epsilon,
+        block_encoding_residual_tolerance=block_encoding_residual_tolerance,
         tolerance=tolerance,
     )
 
@@ -329,16 +381,37 @@ def format_result(result: VerificationResult, *, show_trace: bool = False) -> st
         lines.append(f"Final B[{_format_key(key)}] = {result.final_state.top_left()}")
 
     if result.expected is not None:
-        expected_label = "Expected B0" if result.final_state.num_ancillas == 1 else f"Expected B[{_format_key((0,) * result.final_state.num_ancillas)}]"
+        if result.block_encoding_epsilon is None:
+            expected_label = "Expected B0" if result.final_state.num_ancillas == 1 else f"Expected B[{_format_key((0,) * result.final_state.num_ancillas)}]"
+        else:
+            expected_label = "Target H"
         lines.append(f"{expected_label} = {result.expected}")
-        if result.status == PASS:
-            lines.append(PASS)
+        if result.status == PASS_EXACT:
+            lines.append(PASS_EXACT)
         elif result.status == PASS_UP_TO_SCALE:
             lines.append(PASS_UP_TO_SCALE)
             lines.append(f"scale = {_format_scalar(result.scale)}")
+        elif result.status == PASS:
+            check = result.block_encoding_check
+            lines.append(PASS)
+            if check is not None:
+                lines.append(f"alpha = {check.alpha:.12g}")
+                lines.append(f"Projection length = {check.projection_length:.12g}")
+                lines.append(f"Coefficient residual norm = {check.residual_norm:.12g}")
+                lines.append(f"Coefficient residual threshold = {check.threshold:.12g}")
+                lines.append(f"Coefficient residual numerical tolerance = {check.numerical_tolerance:.12g}")
+                lines.append(f"Coefficient residual acceptance threshold = {check.acceptance_threshold:.12g}")
         else:
             diff = result.final_state.top_left() - result.expected
             lines.append(FAIL)
+            check = result.block_encoding_check
+            if check is not None:
+                lines.append(f"alpha = {check.alpha:.12g}")
+                lines.append(f"Projection length = {check.projection_length:.12g}")
+                lines.append(f"Coefficient residual norm = {check.residual_norm:.12g}")
+                lines.append(f"Coefficient residual threshold = {check.threshold:.12g}")
+                lines.append(f"Coefficient residual numerical tolerance = {check.numerical_tolerance:.12g}")
+                lines.append(f"Coefficient residual acceptance threshold = {check.acceptance_threshold:.12g}")
             diff_label = "B0" if result.final_state.num_ancillas == 1 else f"B[{_format_key((0,) * result.final_state.num_ancillas)}]"
             lines.append(f"{diff_label} - expected = {diff}")
 
@@ -725,6 +798,86 @@ def proportional_scale(actual: OpExpr, expected: OpExpr, *, tol: float = DEFAULT
     return True, scale
 
 
+def block_encoding_proportionality_check(
+    actual: OpExpr,
+    target: OpExpr,
+    *,
+    epsilon: float,
+    residual_tolerance: float = DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE,
+) -> BlockEncodingProportionalityCheck:
+    if epsilon <= 0:
+        raise ValueError("block_encoding_epsilon must be positive")
+    if residual_tolerance < 0:
+        raise ValueError("residual_tolerance must be nonnegative")
+
+    actual, target = _align_operator_qubits(actual, target)
+    actual_terms = _nonzero_terms(actual)
+    target_terms = _nonzero_terms(target)
+    pauli_strings = set(actual_terms) | set(target_terms)
+    threshold = epsilon / (2 ** (actual.num_qubits / 2))
+    acceptance_threshold = max(threshold, residual_tolerance)
+    if not pauli_strings:
+        return BlockEncodingProportionalityCheck(
+            epsilon=epsilon,
+            alpha=0.0,
+            projection_length=0.0,
+            residual_norm=math.inf,
+            threshold=threshold,
+            numerical_tolerance=residual_tolerance,
+            acceptance_threshold=acceptance_threshold,
+            coefficient_norm=0.0,
+            target_norm=0.0,
+        )
+
+    actual_coeffs: dict[tuple[str, ...], complex] = {}
+    target_coeffs: dict[tuple[str, ...], complex] = {}
+    for pauli_string in pauli_strings:
+        actual_coeffs[pauli_string] = _coefficient_as_complex(actual_terms.get(pauli_string, sp.Integer(0)))
+        target_coeffs[pauli_string] = _coefficient_as_complex(target_terms.get(pauli_string, sp.Integer(0)))
+
+    actual_norm_sq = sum(abs(coeff) ** 2 for coeff in actual_coeffs.values())
+    target_norm_sq = sum(abs(coeff) ** 2 for coeff in target_coeffs.values())
+    if actual_norm_sq == 0 or target_norm_sq == 0:
+        return BlockEncodingProportionalityCheck(
+            epsilon=epsilon,
+            alpha=0.0,
+            projection_length=0.0,
+            residual_norm=math.inf,
+            threshold=threshold,
+            numerical_tolerance=residual_tolerance,
+            acceptance_threshold=acceptance_threshold,
+            coefficient_norm=math.sqrt(actual_norm_sq),
+            target_norm=math.sqrt(target_norm_sq),
+        )
+
+    inner = sum(actual_coeffs[key].conjugate() * target_coeffs[key] for key in pauli_strings)
+    actual_norm = math.sqrt(actual_norm_sq)
+    projection_length = inner.real / actual_norm
+    alpha = projection_length / actual_norm
+    if alpha <= 0:
+        residual_norm = math.inf
+    else:
+        residual_norm = math.sqrt(
+            sum(abs(alpha * actual_coeffs[key] - target_coeffs[key]) ** 2 for key in pauli_strings)
+        )
+
+    return BlockEncodingProportionalityCheck(
+        epsilon=epsilon,
+        alpha=alpha,
+        projection_length=projection_length,
+        residual_norm=residual_norm,
+        threshold=threshold,
+        numerical_tolerance=residual_tolerance,
+        acceptance_threshold=acceptance_threshold,
+        coefficient_norm=actual_norm,
+        target_norm=math.sqrt(target_norm_sq),
+    )
+
+
+def _coefficient_as_complex(value: sp.Expr) -> complex:
+    return complex(sp.N(value, 50))
+
+
 def _align_operator_qubits(actual: OpExpr, expected: OpExpr) -> Tuple[OpExpr, OpExpr]:
     num_qubits = max(actual.num_qubits, expected.num_qubits)
     return actual.with_num_qubits(num_qubits), expected.with_num_qubits(num_qubits)
@@ -826,6 +979,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "Use 0 to disable."
         ),
     )
+    parser.add_argument(
+        "--block-encoding-epsilon",
+        type=float,
+        help=(
+            "Block-encoding route: accept when the final all-zero branch is proportional "
+            "to the target Hamiltonian within this operator-norm tolerance."
+        ),
+    )
+    parser.add_argument(
+        "--block-encoding-residual-tolerance",
+        type=float,
+        default=DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE,
+        help=(
+            "Numerical floor for block-encoding coefficient residual checks with decimal QASM angles. "
+            f"Default: {DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE:g}."
+        ),
+    )
     parser.add_argument("--hermitian-base", action="store_true", help="Rewrite Hd atoms to H before QSP polynomial evaluation.")
     parser.add_argument(
         "--compare-polynomial-only",
@@ -863,6 +1033,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         target_exp_epsilon=args.target_exp_epsilon,
         target_exp_scale=args.target_exp_scale,
         max_approx_grid_points=max_approx_grid_points,
+        block_encoding_epsilon=args.block_encoding_epsilon,
+        block_encoding_residual_tolerance=args.block_encoding_residual_tolerance,
         tolerance=args.tolerance,
         profile_gates=args.profile_gates,
     )

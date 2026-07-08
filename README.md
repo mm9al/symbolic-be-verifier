@@ -64,6 +64,13 @@ Run the symbolic block-encoding evaluation:
 .venv/bin/python evaluation/run_block_encoding.py
 ```
 
+The block-encoding evaluation uses the paper's final proportionality check by
+default: it treats the manifest Hamiltonian as `H`, infers the real positive
+subnormalization factor `alpha`, and checks the coefficient residual with
+`epsilon = 1e-8` plus a `1e-12` numerical residual floor for decimal QASM
+rotation angles. Pass `--check-mode exact` only to reproduce the older
+normalized top-left-block comparison.
+
 Results are written to `evaluation/results/block_encoding_results.csv`. For a
 quick smoke suite, pass a smaller size list such as:
 
@@ -134,7 +141,11 @@ and verifies the final all-zero branch against the expected top-left block.
 
 Verification results:
 
-- `PASS`: final all-zero branch exactly equals the expected operator.
+- `PASS`: with `--block-encoding-epsilon`, the final all-zero branch is
+  proportional to the target Hamiltonian within the requested tolerance, using
+  the inferred real positive subnormalization factor `alpha`.
+- `PASS_EXACT`: final all-zero branch exactly equals the expected operator in
+  exact comparison mode.
 - `PASS_UP_TO_SCALE`: final all-zero branch is `scale * expected` for a scalar `scale`.
 - `FAIL`: final all-zero branch is neither exactly equal nor equal up to a scalar.
 
@@ -146,7 +157,10 @@ Override it with `--tolerance` when running `symbolic.verify`.
 The command-line verifier supports three separate routes:
 
 - Block encoding: compare the final all-zero branch to an operator passed with
-  `--expected`.
+  `--expected`. With `--block-encoding-epsilon`, treat `--expected` as the
+  target Hamiltonian `H`, infer the real positive `alpha` minimizing
+  `||alpha*B - H||`, and accept when the coefficient residual is at most
+  `max(epsilon / 2^(n/2), residual_tolerance)`.
 - Hamiltonian simulation: compute the final symbolic polynomial and check it
   directly against `scale * exp(-i*x*tau)` on `[-1, 1]` with `--hamsim-tau`,
   `--hamsim-epsilon`, and `--hamsim-scale`.

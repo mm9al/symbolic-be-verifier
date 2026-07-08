@@ -10,8 +10,10 @@ from symbolic.verify import (
     FAIL,
     FAIL_GARBAGE,
     PASS,
+    PASS_EXACT,
     PASS_UP_TO_SCALE,
     VerificationResult,
+    block_encoding_proportionality_check,
     format_gate_profiles_csv,
     format_result,
     pauli_expr_close,
@@ -38,7 +40,7 @@ def test_lcu_x_minus_z_example_verifies():
     result = verify_qasm_file(path, expected="(X - Z)/2", keep_trace=True)
 
     assert result.success is True
-    assert result.status == PASS
+    assert result.status == PASS_EXACT
     assert result.final_state.b0.equals((pauli("X") - pauli("Z")).scale(sp.Rational(1, 2)))
     assert len(result.trace) == len(parse_qasm_file(path)) + 1
 
@@ -66,7 +68,7 @@ def test_lcu_xx_plus_zz_example_verifies():
     ).scale(sp.Rational(1, 2))
 
     assert result.success is True
-    assert result.status == PASS
+    assert result.status == PASS_EXACT
     assert result.final_state.b0.equals(expected)
     assert str(result.final_state.b0) == "(X_0 X_1 + Z_0 Z_1)/2"
     assert len(result.trace) == len(parse_qasm_file(path)) + 1
@@ -195,6 +197,56 @@ def test_proportional_non_unit_scale_passes():
     assert result.status == PASS_UP_TO_SCALE
 
 
+def test_block_encoding_proportionality_infers_real_positive_alpha_with_norm_squared_denominator():
+    actual = pauli("X").scale(2)
+    target = pauli("X").scale(6)
+
+    check = block_encoding_proportionality_check(actual, target, epsilon=1e-12)
+
+    assert check.success is True
+    assert check.projection_length == pytest.approx(6.0)
+    assert check.alpha == pytest.approx(3.0)
+    assert check.residual_norm == pytest.approx(0.0)
+
+
+def test_block_encoding_proportionality_rejects_negative_ray():
+    actual = pauli("X").scale(-1)
+    target = pauli("X")
+
+    check = block_encoding_proportionality_check(actual, target, epsilon=1)
+
+    assert check.success is False
+    assert check.alpha == pytest.approx(-1.0)
+
+
+def test_block_encoding_proportionality_accepts_decimal_roundoff_floor():
+    actual = pauli("X", num_qubits=64)
+    target = pauli("X", num_qubits=64) + pauli("Z", num_qubits=64).scale(sp.Float("1e-14"))
+
+    check = block_encoding_proportionality_check(actual, target, epsilon=1e-8)
+
+    assert check.threshold < 1e-17
+    assert check.residual_norm == pytest.approx(1e-14)
+    assert check.acceptance_threshold == pytest.approx(1e-12)
+    assert check.success is True
+
+
+def test_verification_status_uses_block_encoding_epsilon_against_target_hamiltonian():
+    target = pauli("X") + pauli("Z")
+    actual = target.scale(sp.Rational(1, 4))
+    result = VerificationResult(
+        final_state=BranchState(1, 1, {(0,): actual}),
+        trace=[],
+        expected=target,
+        block_encoding_epsilon=1e-12,
+    )
+
+    assert result.success is True
+    assert result.status == PASS
+    assert result.block_encoding_check.alpha == pytest.approx(4.0)
+    assert "alpha = 4" in format_result(result)
+
+
 def test_numeric_tolerance_accepts_exponential_and_decimal_coefficients():
     actual_coeff = sp.exp(sp.I * sp.Rational(1160258681, 10**12))
     expected_coeff = sp.Float("0.9999993269", 20) + sp.I * sp.Float("0.001160258420", 20)
@@ -208,7 +260,7 @@ def test_numeric_tolerance_accepts_exponential_and_decimal_coefficients():
     result = VerificationResult(final_state=BranchState(1, 1, {(0,): actual}), trace=[], expected=expected)
 
     assert result.success is True
-    assert result.status == PASS
+    assert result.status == PASS_EXACT
 
 
 def test_ancilla_rx_and_ry_update_rules():

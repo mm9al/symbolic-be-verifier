@@ -18,6 +18,16 @@ Run symbolic block-encoding verification:
 .venv/bin/python evaluation/run_block_encoding.py
 ```
 
+RQ1 uses the paper's final proportionality check by default. For each row, the
+runner multiplies the manifest's normalized expected block by the declared
+`alpha` to recover the target Hamiltonian `H`, infers the best real positive
+`alpha`, and accepts when the coefficient residual is at most
+`max(epsilon / 2^(n/2), residual_tolerance)`. The default
+`--block-encoding-epsilon` is `1e-8`, and the default
+`--block-encoding-residual-tolerance` is `1e-12` to absorb roundoff from
+decimal QASM rotation angles. Use `--check-mode exact` only for the older exact
+comparison against the normalized top-left block.
+
 Write per-gate profiling CSV files while running selected benchmarks:
 
 ```bash
@@ -33,6 +43,11 @@ The result CSV is written to:
 ```text
 evaluation/results/block_encoding_results.csv
 ```
+
+The RQ1 CSV includes `check_mode`, `check_epsilon`, `inferred_alpha`,
+`residual_norm`, `residual_threshold`, `residual_numerical_tolerance`, and
+`residual_acceptance_threshold` so paper-mode results record the final
+proportionality check data explicitly.
 
 The default sizes are the consecutive integers `n = 2..128`.
 All three families use the same `ry`-based uniform PREP generator, including

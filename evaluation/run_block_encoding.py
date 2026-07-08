@@ -15,15 +15,30 @@ MANIFEST_PATH = ROOT / "benchmarks" / "block_encoding" / "manifest.csv"
 RESULTS_DIR = ROOT / "evaluation" / "results"
 RESULTS_PATH = RESULTS_DIR / "block_encoding_results.csv"
 DEFAULT_TIMEOUT_SEC = 1800.0
+DEFAULT_BLOCK_ENCODING_EPSILON = 1e-8
 
 sys.path.insert(0, str(ROOT))
 
 from symbolic.qasm_parser import parse_qasm_file  # noqa: E402
-from symbolic.verify import gate_profile_fieldnames, gate_profile_rows, verify_qasm_file  # noqa: E402
+from symbolic.verify import (  # noqa: E402
+    DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE,
+    gate_profile_fieldnames,
+    gate_profile_rows,
+    parse_scalar_expression,
+    verify_qasm_file,
+)
 
 
 def main() -> int:
     args = _parse_args()
+    if args.check_mode == "paper" and args.block_encoding_epsilon <= 0:
+        raise SystemExit("--block-encoding-epsilon must be positive")
+    if args.check_mode == "paper" and args.block_encoding_residual_tolerance < 0:
+        raise SystemExit("--block-encoding-residual-tolerance must be nonnegative")
+    block_encoding_epsilon = args.block_encoding_epsilon if args.check_mode == "paper" else None
+    block_encoding_residual_tolerance = (
+        args.block_encoding_residual_tolerance if args.check_mode == "paper" else None
+    )
     manifest_path = args.manifest
     if not manifest_path.exists():
         raise SystemExit(f"Missing {manifest_path.relative_to(ROOT)}. Run evaluation/generate_benchmarks.py first.")
@@ -40,9 +55,21 @@ def main() -> int:
         writer.writeheader()
         for row in rows:
             if row["model"] in timeout_models:
-                result = _skipped_after_timeout(row)
+                result = _skipped_after_timeout(
+                    row,
+                    check_mode=args.check_mode,
+                    block_encoding_epsilon=block_encoding_epsilon,
+                    block_encoding_residual_tolerance=block_encoding_residual_tolerance,
+                )
             else:
-                result = _run_benchmark(row, timeout_sec=args.timeout_sec, profile_dir=args.profile_dir)
+                result = _run_benchmark(
+                    row,
+                    timeout_sec=args.timeout_sec,
+                    profile_dir=args.profile_dir,
+                    check_mode=args.check_mode,
+                    block_encoding_epsilon=block_encoding_epsilon,
+                    block_encoding_residual_tolerance=block_encoding_residual_tolerance,
+                )
                 if result["status"] == "TIMEOUT":
                     timeout_models.add(row["model"])
             writer.writerow(result)
@@ -58,6 +85,15 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=RESULTS_PATH)
     parser.add_argument("--models", nargs="+", choices=("ising", "maxcut", "heisenberg"))
     parser.add_argument(
+        "--check-mode",
+        choices=("paper", "exact"),
+        default="paper",
+        help=(
+            "Verification mode. 'paper' checks approximate proportionality against H; "
+            "'exact' compares against the normalized top-left block from the manifest. Default: paper."
+        ),
+    )
+    parser.add_argument(
         "--timeout-sec",
         type=float,
         default=DEFAULT_TIMEOUT_SEC,
@@ -68,6 +104,24 @@ def _parse_args() -> argparse.Namespace:
         type=Path,
         help="Optional directory for per-benchmark gate-level profile CSV files.",
     )
+    parser.add_argument(
+        "--block-encoding-epsilon",
+        type=float,
+        default=DEFAULT_BLOCK_ENCODING_EPSILON,
+        help=(
+            "Tolerance for --check-mode paper. The manifest's normalized expected block "
+            f"is multiplied by alpha to recover the target H. Default: {DEFAULT_BLOCK_ENCODING_EPSILON:g}."
+        ),
+    )
+    parser.add_argument(
+        "--block-encoding-residual-tolerance",
+        type=float,
+        default=DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE,
+        help=(
+            "Numerical floor for paper-mode coefficient residual checks with decimal QASM angles. "
+            f"Default: {DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE:g}."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -76,12 +130,29 @@ def _read_manifest(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
-def _run_benchmark(row: dict[str, str], *, timeout_sec: float, profile_dir: Path | None) -> dict[str, str]:
+def _run_benchmark(
+    row: dict[str, str],
+    *,
+    timeout_sec: float,
+    profile_dir: Path | None,
+    check_mode: str,
+    block_encoding_epsilon: float | None,
+    block_encoding_residual_tolerance: float | None,
+) -> dict[str, str]:
     if timeout_sec <= 0:
-        return _run_benchmark_inner(row, profile_dir=profile_dir)
+        return _run_benchmark_inner(
+            row,
+            profile_dir=profile_dir,
+            check_mode=check_mode,
+            block_encoding_epsilon=block_encoding_epsilon,
+            block_encoding_residual_tolerance=block_encoding_residual_tolerance,
+        )
 
     queue: mp.Queue = mp.Queue(maxsize=1)
-    process = mp.Process(target=_worker, args=(row, queue, profile_dir))
+    process = mp.Process(
+        target=_worker,
+        args=(row, queue, profile_dir, check_mode, block_encoding_epsilon, block_encoding_residual_tolerance),
+    )
     started = time.perf_counter()
     process.start()
     process.join(timeout_sec)
@@ -91,6 +162,7 @@ def _run_benchmark(row: dict[str, str], *, timeout_sec: float, profile_dir: Path
         process.join()
         return {
             **_metadata(row),
+            **_check_metadata(check_mode, block_encoding_epsilon, block_encoding_residual_tolerance, None),
             "runtime_sec": f"{time.perf_counter() - started:.9f}",
             "tracemalloc_peak_mb": "",
             "process_maxrss_mb": "",
@@ -104,6 +176,7 @@ def _run_benchmark(row: dict[str, str], *, timeout_sec: float, profile_dir: Path
 
     return {
         **_metadata(row),
+        **_check_metadata(check_mode, block_encoding_epsilon, block_encoding_residual_tolerance, None),
         "runtime_sec": f"{time.perf_counter() - started:.9f}",
         "tracemalloc_peak_mb": "",
         "process_maxrss_mb": "",
@@ -113,28 +186,60 @@ def _run_benchmark(row: dict[str, str], *, timeout_sec: float, profile_dir: Path
     }
 
 
-def _worker(row: dict[str, str], queue: "mp.Queue", profile_dir: Path | None) -> None:
-    queue.put(_run_benchmark_inner(row, profile_dir=profile_dir))
+def _worker(
+    row: dict[str, str],
+    queue: "mp.Queue",
+    profile_dir: Path | None,
+    check_mode: str,
+    block_encoding_epsilon: float | None,
+    block_encoding_residual_tolerance: float | None,
+) -> None:
+    queue.put(
+        _run_benchmark_inner(
+            row,
+            profile_dir=profile_dir,
+            check_mode=check_mode,
+            block_encoding_epsilon=block_encoding_epsilon,
+            block_encoding_residual_tolerance=block_encoding_residual_tolerance,
+        )
+    )
 
 
-def _run_benchmark_inner(row: dict[str, str], *, profile_dir: Path | None) -> dict[str, str]:
+def _run_benchmark_inner(
+    row: dict[str, str],
+    *,
+    profile_dir: Path | None,
+    check_mode: str,
+    block_encoding_epsilon: float | None,
+    block_encoding_residual_tolerance: float | None,
+) -> dict[str, str]:
     error = ""
     status = "ERROR"
     success = "False"
     qasm_path = ROOT / row["qasm_path"]
     ancillas = _parse_int_list(row["ancillas"])
     systems = _parse_int_list(row["systems"])
+    expected = row["expected"]
+    if check_mode == "paper":
+        alpha = parse_scalar_expression(row["alpha"])
+        expected = f"({alpha})*({expected})"
 
     tracemalloc.start()
     started = time.perf_counter()
     try:
         result = verify_qasm_file(
             qasm_path,
-            expected=row["expected"],
+            expected=expected,
             ancillas=ancillas,
             systems=systems,
             keep_trace=False,
             profile_gates=profile_dir is not None,
+            block_encoding_epsilon=block_encoding_epsilon,
+            block_encoding_residual_tolerance=(
+                block_encoding_residual_tolerance
+                if block_encoding_residual_tolerance is not None
+                else DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE
+            ),
         )
         if profile_dir is not None:
             _write_gate_profile(row, result, profile_dir)
@@ -148,6 +253,12 @@ def _run_benchmark_inner(row: dict[str, str], *, profile_dir: Path | None) -> di
 
     return {
         **_metadata(row),
+        **_check_metadata(
+            check_mode,
+            block_encoding_epsilon,
+            block_encoding_residual_tolerance,
+            result.block_encoding_check if "result" in locals() else None,
+        ),
         "runtime_sec": f"{runtime_sec:.9f}",
         "tracemalloc_peak_mb": f"{_bytes_to_mib(peak_bytes):.6f}",
         "process_maxrss_mb": f"{_process_maxrss_mb():.6f}",
@@ -186,9 +297,16 @@ def _write_gate_profile(row: dict[str, str], result, profile_dir: Path) -> None:
             writer.writerow({"benchmark_id": row["benchmark_id"], **profile_row})
 
 
-def _skipped_after_timeout(row: dict[str, str]) -> dict[str, str]:
+def _skipped_after_timeout(
+    row: dict[str, str],
+    *,
+    check_mode: str,
+    block_encoding_epsilon: float | None,
+    block_encoding_residual_tolerance: float | None,
+) -> dict[str, str]:
     return {
         **_metadata(row),
+        **_check_metadata(check_mode, block_encoding_epsilon, block_encoding_residual_tolerance, None),
         "runtime_sec": "",
         "tracemalloc_peak_mb": "",
         "process_maxrss_mb": "",
@@ -213,6 +331,13 @@ def _fieldnames() -> list[str]:
         "max_locality",
         "gate_count",
         "qasm_path",
+        "check_mode",
+        "check_epsilon",
+        "inferred_alpha",
+        "residual_norm",
+        "residual_threshold",
+        "residual_numerical_tolerance",
+        "residual_acceptance_threshold",
         "runtime_sec",
         "tracemalloc_peak_mb",
         "process_maxrss_mb",
@@ -220,6 +345,43 @@ def _fieldnames() -> list[str]:
         "success",
         "error",
     ]
+
+
+def _check_metadata(
+    check_mode: str,
+    block_encoding_epsilon: float | None,
+    block_encoding_residual_tolerance: float | None,
+    check,
+) -> dict[str, str]:
+    if check_mode != "paper":
+        return {
+            "check_mode": check_mode,
+            "check_epsilon": "",
+            "inferred_alpha": "",
+            "residual_norm": "",
+            "residual_threshold": "",
+            "residual_numerical_tolerance": "",
+            "residual_acceptance_threshold": "",
+        }
+    if check is None:
+        return {
+            "check_mode": check_mode,
+            "check_epsilon": f"{block_encoding_epsilon:.12g}",
+            "inferred_alpha": "",
+            "residual_norm": "",
+            "residual_threshold": "",
+            "residual_numerical_tolerance": f"{block_encoding_residual_tolerance:.12g}",
+            "residual_acceptance_threshold": "",
+        }
+    return {
+        "check_mode": check_mode,
+        "check_epsilon": f"{block_encoding_epsilon:.12g}",
+        "inferred_alpha": f"{check.alpha:.12g}",
+        "residual_norm": f"{check.residual_norm:.12g}",
+        "residual_threshold": f"{check.threshold:.12g}",
+        "residual_numerical_tolerance": f"{check.numerical_tolerance:.12g}",
+        "residual_acceptance_threshold": f"{check.acceptance_threshold:.12g}",
+    }
 
 
 def _parse_int_list(text: str) -> tuple[int, ...]:
