@@ -231,6 +231,19 @@ def test_block_encoding_proportionality_accepts_decimal_roundoff_floor():
     assert check.success is True
 
 
+def test_block_encoding_proportionality_uses_high_precision_residual_norm():
+    actual = pauli("X", num_qubits=64).scale(sp.Float("0.1", 80))
+    actual += pauli("Z", num_qubits=64).scale(sp.Float("0.2", 80))
+    target = pauli("X", num_qubits=64) + pauli("Z", num_qubits=64).scale(2)
+
+    check = block_encoding_proportionality_check(actual, target, epsilon=1e-8, residual_tolerance=0)
+
+    assert check.threshold < 1e-17
+    assert check.alpha == pytest.approx(10.0)
+    assert check.residual_norm < sp.Float("1e-50", 60)
+    assert check.success is True
+
+
 def test_verification_status_uses_block_encoding_epsilon_against_target_hamiltonian():
     target = pauli("X") + pauli("Z")
     actual = target.scale(sp.Rational(1, 4))
@@ -536,7 +549,19 @@ def test_qsp_target_exp_check_can_drive_status_without_expected_polynomial():
     assert result.qsp_approximation.success is True
 
 
-def test_qsp_target_exp_grid_uses_markov_degree_bound():
+def test_qsp_target_exp_check_fits_beta_before_measuring_error():
+    check = verify_polynomial_approximates_exp(
+        "0.25",
+        tau=0.0,
+        epsilon=0.1,
+    )
+
+    assert check.beta == pytest.approx(4.0 + 0j)
+    assert check.max_grid_error == pytest.approx(0.0)
+    assert check.success is True
+
+
+def test_qsp_target_exp_grid_uses_lipschitz_chebyshev_bound():
     check = verify_polynomial_approximates_exp(
         "1 - i*x + 0.5*x^3",
         tau=0.5,
@@ -545,20 +570,34 @@ def test_qsp_target_exp_grid_uses_markov_degree_bound():
     )
 
     assert check.polynomial_degree == 3
-    assert check.polynomial_derivative_bound == 3
+    assert check.approximation_degree == 7
     assert check.target_lipschitz == pytest.approx(0.125)
-    assert check.num_grid_points == 100
-    assert check.spacing == pytest.approx(float(sp.pi / 99))
+    assert check.num_grid_points == 28
+    assert check.angular_spacing == pytest.approx(float(sp.pi / 28))
+
+
+def test_qsp_target_exp_grid_uses_new_paper_bound_for_rescaled_polynomial():
+    check = verify_polynomial_approximates_exp(
+        "1 - i*x + 0.5*x^3",
+        tau=0.5,
+        epsilon=0.1,
+    )
+
+    assert check.polynomial_degree == 3
+    assert check.approximation_degree == 7
+    assert check.target_lipschitz == pytest.approx(0.5)
+    assert check.num_grid_points == 28
+    assert check.angular_spacing == pytest.approx(float(sp.pi / 28))
 
 
 def test_qsp_target_exp_grid_guard_fails_fast():
-    with pytest.raises(ValueError, match="Approximation grid requires 100 Chebyshev points"):
+    with pytest.raises(ValueError, match="Approximation grid requires 28 Chebyshev roots"):
         verify_polynomial_approximates_exp(
             "1 - i*x + 0.5*x^3",
             tau=0.5,
             epsilon=0.1,
             scale="0.25",
-            max_grid_points=99,
+            max_grid_points=27,
         )
 
 

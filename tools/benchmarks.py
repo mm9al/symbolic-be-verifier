@@ -11,6 +11,7 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Iterable, Sequence
 
+import mpmath as mp
 import sympy as sp
 
 
@@ -25,6 +26,10 @@ DEFAULT_BLOCK_ENCODING_SIZE_SPEC = ",".join(str(size) for size in DEFAULT_BLOCK_
 DEFAULT_HAMSIM_T_VALUES = (0.1, 0.5, 1.0, 2.0, 4.0)
 DEFAULT_HAMSIM_EPSILONS = (1e-1, 1e-4, 1e-6, 1e-10, 1e-12)
 DEFAULT_HAMSIM_PRECISION = 17
+DEFAULT_BLOCK_ENCODING_ANGLE_PRECISION = 60
+
+GateParameter = float | mp.mpf
+GateSpec = tuple[str, tuple[int, ...], GateParameter | None]
 
 
 @dataclass(frozen=True)
@@ -366,9 +371,14 @@ def heisenberg_terms(
     return terms
 
 
-def write_block_encoding_qasm(benchmark: HamiltonianBenchmark, path: Path) -> None:
+def write_block_encoding_qasm(
+    benchmark: HamiltonianBenchmark,
+    path: Path,
+    *,
+    angle_precision: int = DEFAULT_BLOCK_ENCODING_ANGLE_PRECISION,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = _block_encoding_qasm_lines(benchmark)
+    lines = _block_encoding_qasm_lines(benchmark, angle_precision=angle_precision)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -397,13 +407,24 @@ def write_manifest(rows: list[dict[str, str]], path: Path) -> None:
         writer.writerows(rows)
 
 
-def _block_encoding_qasm_lines(benchmark: HamiltonianBenchmark) -> list[str]:
+def _block_encoding_qasm_lines(
+    benchmark: HamiltonianBenchmark,
+    *,
+    angle_precision: int,
+) -> list[str]:
     selector_width = benchmark.selector_ancillas
     work = selector_width
     system_offset = benchmark.n_ancilla
     num_qubits = benchmark.n_ancilla + benchmark.n_system
 
-    prep = _uniform_first_l_state_prep(selector_width, len(benchmark.terms), work)
+    with mp.workdps(angle_precision):
+        prep = _uniform_first_l_state_prep(
+            selector_width,
+            len(benchmark.terms),
+            work,
+            angle_precision=angle_precision,
+        )
+        inverse_prep = _inverse_gates(prep)
     lines = [
         "OPENQASM 2.0;",
         'include "qelib1.inc";',
@@ -418,7 +439,7 @@ def _block_encoding_qasm_lines(benchmark: HamiltonianBenchmark) -> list[str]:
         "",
         "// PREP: uniform state over Hamiltonian terms",
     ]
-    lines.extend(_format_gate(gate) for gate in prep)
+    lines.extend(_format_gate(gate, angle_precision=angle_precision) for gate in prep)
     lines.extend(["", "// SELECT: branch-conditioned signed Pauli terms"])
 
     for index, term in enumerate(benchmark.terms):
@@ -433,20 +454,26 @@ def _block_encoding_qasm_lines(benchmark: HamiltonianBenchmark) -> list[str]:
             lines.append(f"// term {index}: +I")
             continue
         lines.append(f"// term {index}: {_format_term_comment(term)}")
-        lines.extend(_format_gate(gate) for gate in select)
+        lines.extend(_format_gate(gate, angle_precision=angle_precision) for gate in select)
 
     lines.extend(["", "// PREP dagger"])
-    lines.extend(_format_gate(gate) for gate in _inverse_gates(prep))
+    lines.extend(_format_gate(gate, angle_precision=angle_precision) for gate in inverse_prep)
     return lines
 
 
-def _uniform_first_l_state_prep(selector_width: int, term_count: int, work: int) -> list[tuple[str, tuple[int, ...], float | None]]:
+def _uniform_first_l_state_prep(
+    selector_width: int,
+    term_count: int,
+    work: int,
+    *,
+    angle_precision: int,
+) -> list[GateSpec]:
     if term_count < 1:
         raise ValueError("term_count must be positive")
     if term_count > 2**selector_width:
         raise ValueError("term_count does not fit in selector_width bits")
 
-    gates: list[tuple[str, tuple[int, ...], float | None]] = []
+    gates: list[GateSpec] = []
     for depth in range(selector_width):
         for prefix_value in range(2**depth):
             prefix = _bits(prefix_value, depth)
@@ -461,9 +488,16 @@ def _uniform_first_l_state_prep(selector_width: int, term_count: int, work: int)
             if count0 == 0:
                 _append_controlled_x(gates, prefix, target, work)
                 continue
-            theta = 2.0 * math.asin(math.sqrt(count1 / count))
+            theta = _state_prep_angle(count1, count, precision=angle_precision)
             _append_controlled_ry(gates, prefix, target, theta, work)
     return gates
+
+
+def _state_prep_angle(count1: int, count: int, *, precision: int) -> mp.mpf:
+    if precision < 17:
+        raise ValueError("angle_precision must be at least 17 decimal digits")
+    with mp.workdps(precision):
+        return +(mp.mpf(2) * mp.asin(mp.sqrt(mp.mpf(count1) / mp.mpf(count))))
 
 
 def _select_term_gates(
@@ -473,11 +507,11 @@ def _select_term_gates(
     work: int,
     system_offset: int,
     term: PauliTerm,
-) -> list[tuple[str, tuple[int, ...], float | None]]:
+) -> list[GateSpec]:
     if term.coefficient > 0 and not term.paulis:
         return []
 
-    gates: list[tuple[str, tuple[int, ...], float | None]] = []
+    gates: list[GateSpec] = []
     pattern = _bits(index, selector_width)
     _append_pattern_toggles(gates, pattern)
     _append_compute_flag(gates, selector_width, work)
@@ -504,10 +538,10 @@ def _select_term_gates(
 
 
 def _append_controlled_ry(
-    gates: list[tuple[str, tuple[int, ...], float | None]],
+    gates: list[GateSpec],
     prefix: tuple[int, ...],
     target: int,
-    theta: float,
+    theta: GateParameter,
     work: int,
 ) -> None:
     if not prefix:
@@ -526,7 +560,7 @@ def _append_controlled_ry(
 
 
 def _append_controlled_x(
-    gates: list[tuple[str, tuple[int, ...], float | None]],
+    gates: list[GateSpec],
     prefix: tuple[int, ...],
     target: int,
     work: int,
@@ -547,10 +581,10 @@ def _append_controlled_x(
 
 
 def _append_cry(
-    gates: list[tuple[str, tuple[int, ...], float | None]],
+    gates: list[GateSpec],
     control: int,
     target: int,
-    theta: float,
+    theta: GateParameter,
 ) -> None:
     gates.append(("ry", (target,), theta / 2))
     gates.append(("cx", (control, target), None))
@@ -558,14 +592,14 @@ def _append_cry(
     gates.append(("cx", (control, target), None))
 
 
-def _append_pattern_toggles(gates: list[tuple[str, tuple[int, ...], float | None]], pattern: tuple[int, ...]) -> None:
+def _append_pattern_toggles(gates: list[GateSpec], pattern: tuple[int, ...]) -> None:
     for qubit, bit in enumerate(pattern):
         if bit == 0:
             gates.append(("x", (qubit,), None))
 
 
 def _append_compute_flag(
-    gates: list[tuple[str, tuple[int, ...], float | None]],
+    gates: list[GateSpec],
     selector_width: int,
     work: int,
 ) -> None:
@@ -577,12 +611,14 @@ def _append_compute_flag(
 
 
 def _inverse_gates(
-    gates: Sequence[tuple[str, tuple[int, ...], float | None]]
-) -> list[tuple[str, tuple[int, ...], float | None]]:
+    gates: Sequence[GateSpec]
+) -> list[GateSpec]:
     inverse = []
     for name, qubits, parameter in reversed(gates):
         if name == "ry":
-            inverse.append((name, qubits, -float(parameter)))
+            if parameter is None:
+                raise ValueError("ry gate requires a parameter")
+            inverse.append((name, qubits, -parameter))
         else:
             inverse.append((name, qubits, parameter))
     return inverse
@@ -596,15 +632,19 @@ def _bits(value: int, width: int) -> tuple[int, ...]:
     return tuple((value >> shift) & 1 for shift in reversed(range(width)))
 
 
-def _format_gate(gate: tuple[str, tuple[int, ...], float | None]) -> str:
+def _format_gate(gate: GateSpec, *, angle_precision: int = 17) -> str:
     name, qubits, parameter = gate
     operands = ", ".join(f"q[{qubit}]" for qubit in qubits)
     if parameter is None:
         return f"{name} {operands};"
-    return f"{name}({_format_angle(parameter)}) {operands};"
+    return f"{name}({_format_angle(parameter, precision=angle_precision)}) {operands};"
 
 
-def _format_angle(value: float) -> str:
+def _format_angle(value: GateParameter, *, precision: int = 17) -> str:
+    if isinstance(value, mp.mpf):
+        if abs(value) < mp.mpf(10) ** (-(precision - 5)):
+            return "0"
+        return mp.nstr(value, n=precision)
     if abs(value) < 1e-15:
         value = 0.0
     return f"{value:.17g}"
@@ -692,6 +732,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=DEFAULT_BLOCK_ENCODING_SIZE_SPEC,
         help='Comma-separated sizes or ranges, e.g. "2..128" or "2,3,5,8".',
     )
+    parser.add_argument(
+        "--angle-precision",
+        type=int,
+        default=DEFAULT_BLOCK_ENCODING_ANGLE_PRECISION,
+        help="Decimal digits used for generated block-encoding ry angles.",
+    )
     parser.add_argument("--out-dir", type=Path, default=ROOT / "benchmarks" / "block_encoding")
     args = parser.parse_args(argv)
 
@@ -704,7 +750,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     rows = []
     for benchmark in block_encoding_suite(_parse_sizes(args.sizes)):
         qasm_path = generated_dir / benchmark.model / f"{benchmark.benchmark_id}.qasm"
-        write_block_encoding_qasm(benchmark, qasm_path)
+        write_block_encoding_qasm(benchmark, qasm_path, angle_precision=args.angle_precision)
         rows.append(benchmark.manifest_row(qasm_path))
     write_manifest(rows, manifest_path)
 

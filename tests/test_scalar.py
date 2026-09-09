@@ -41,3 +41,16 @@ def test_scalar_simplify_skips_exact_simplify_for_float_numbers():
     value = scalar_simplify(sp.cos(sp.Float("0.78539816339744839", 17)))
 
     assert isinstance(value, float)
+
+
+def test_high_precision_numeric_angles_stay_high_precision():
+    theta = sp.Float(
+        "0.78539816339744830961566084581987572104929234984377645524373614807695410157155225",
+        80,
+    )
+
+    value = cos_half(theta)
+
+    assert isinstance(value, sp.Float)
+    assert value._prec > 200
+    assert abs(value - sp.N(sp.cos(theta / 2), 80)) < sp.Float("1e-75", 80)

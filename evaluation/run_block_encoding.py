@@ -21,12 +21,14 @@ sys.path.insert(0, str(ROOT))
 
 from symbolic.qasm_parser import parse_qasm_file  # noqa: E402
 from symbolic.verify import (  # noqa: E402
-    DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE,
     gate_profile_fieldnames,
     gate_profile_rows,
     parse_scalar_expression,
     verify_qasm_file,
 )
+
+
+DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE = 0.0
 
 
 def main() -> int:
@@ -118,7 +120,8 @@ def _parse_args() -> argparse.Namespace:
         type=float,
         default=DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE,
         help=(
-            "Numerical floor for paper-mode coefficient residual checks with decimal QASM angles. "
+            "Optional numerical floor for paper-mode coefficient residual checks. "
+            "The default 0 follows the paper threshold exactly. "
             f"Default: {DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE:g}."
         ),
     )

@@ -22,11 +22,11 @@ RQ1 uses the paper's final proportionality check by default. For each row, the
 runner multiplies the manifest's normalized expected block by the declared
 `alpha` to recover the target Hamiltonian `H`, infers the best real positive
 `alpha`, and accepts when the coefficient residual is at most
-`max(epsilon / 2^(n/2), residual_tolerance)`. The default
-`--block-encoding-epsilon` is `1e-8`, and the default
-`--block-encoding-residual-tolerance` is `1e-12` to absorb roundoff from
-decimal QASM rotation angles. Use `--check-mode exact` only for the older exact
-comparison against the normalized top-left block.
+`epsilon / 2^(n/2)`. The default `--block-encoding-epsilon` is `1e-8`, and
+the optional `--block-encoding-residual-tolerance` numerical floor defaults to
+`0` so the default run follows the paper threshold exactly. Use
+`--check-mode exact` only for the older exact comparison against the normalized
+top-left block.
 
 Write per-gate profiling CSV files while running selected benchmarks:
 
@@ -72,30 +72,39 @@ Run symbolic Hamiltonian-simulation QSP verification:
 .venv/bin/python evaluation/run_hamsim.py
 ```
 
-The default check compares the generated all-zero branch against the exact
-polynomial in the manifest. To check the polynomial numerically against
-`target_scale * exp(-i*x*t)` instead on a fixed-epsilon axis, use:
+By default, the runner uses the paper-style approximation check on the fixed
+epsilon axis:
 
 ```bash
 .venv/bin/python evaluation/run_hamsim.py --axes vary_t --check-mode approximation
 ```
 
-To keep the exact polynomial check as the status gate while also filling
-`approx_max_grid_error`, `approx_worst_x`, and `approx_grid_points`, use:
+The approximation grid uses
+`D = ceil(e*|t|/2 + log(32/epsilon))` and `M = 4*max(D, degree)`, then
+evaluates the Chebyshev roots `x_m = cos((2m - 1)*pi/(2M))` for `m = 1..M`.
+The approximation check computes `beta = <B,e> / ||B||^2` on those grid values
+and reports the error for `beta*B(x) - exp(-i*x*t)`. The `approx_beta` CSV
+field records the fitted scale.
+
+To compare the generated all-zero branch against the exact polynomial in the
+manifest instead, use:
+
+```bash
+.venv/bin/python evaluation/run_hamsim.py --check-mode polynomial
+```
+
+To run the exact polynomial check and also fill `approx_max_grid_error`,
+`approx_worst_x`, `approx_grid_points`, and `approx_beta`, use:
 
 ```bash
 .venv/bin/python evaluation/run_hamsim.py --axes vary_t --check-mode both
 ```
 
-Avoid approximation mode for the default `vary_epsilon` axis unless you
-intentionally want the very fine numerical grid implied by tiny epsilon values.
-The approximation grid uses Chebyshev nodes `x_m = cos(m*pi/M)` with
-`M = ceil(pi * (t + degree) / epsilon)` and evaluates `M + 1` points. The
-approximation check first rescales the extracted branch by `1 / target_scale`,
-so the reported error is for `B(x) / target_scale - exp(-i*x*t)`. By default
-the runner fails fast above 10,000,000 points; pass `--max-approx-grid-points 0`
-only when you intentionally want to disable that guard.
-In default `polynomial` mode, the `approx_*` fields are blank because no grid
+Pass `--axes vary_epsilon` explicitly if you want the epsilon axis. Be careful
+with approximation mode there: small epsilon values imply very fine grids. By
+default the runner fails fast above 10,000,000 points; pass
+`--max-approx-grid-points 0` only when you intentionally want to disable that
+guard. In `polynomial` mode, the `approx_*` fields are blank because no grid
 approximation check is run. The `error` field is blank on successful rows and
 filled only for exceptions, timeouts, or skipped rows.
 The `runtime_sec` field is total wall time. For RQ2 rows, `symbolic_runtime_sec`
@@ -109,7 +118,7 @@ The result CSV is written to:
 evaluation/results/hamsim_results.csv
 ```
 
-The default RQ2 suite uses `t = 0.1, 0.5, 1.0, 2.0, 4.0`,
+The generated RQ2 suite uses `t = 0.1, 0.5, 1.0, 2.0, 4.0`,
 `epsilon = 1e-1, 1e-4, 1e-6, 1e-10, 1e-12`, and `m = 1`.
 For `t = 0.5`, the epsilon axis gives full QSP degrees `3, 5, 7, 9, 11`.
 The degree columns record the generated polynomial degree; on the `vary_t`

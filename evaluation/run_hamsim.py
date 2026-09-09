@@ -15,6 +15,8 @@ MANIFEST_PATH = ROOT / "benchmarks" / "hamsim" / "manifest.csv"
 RESULTS_DIR = ROOT / "evaluation" / "results"
 RESULTS_PATH = RESULTS_DIR / "hamsim_results.csv"
 DEFAULT_TIMEOUT_SEC = 1800.0
+DEFAULT_AXES = ("vary_t",)
+DEFAULT_CHECK_MODE = "approximation"
 
 sys.path.insert(0, str(ROOT))
 
@@ -24,7 +26,6 @@ from symbolic.verify import (  # noqa: E402
     PASS,
     gate_profile_fieldnames,
     gate_profile_rows,
-    rescale_polynomial_for_target,
     verify_polynomial_approximates_exp,
     verify_qasm_file,
 )
@@ -71,14 +72,20 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run RQ2 Hamiltonian-simulation QSP symbolic verification benchmarks.")
     parser.add_argument("--manifest", type=Path, default=MANIFEST_PATH)
     parser.add_argument("--output", type=Path, default=RESULTS_PATH)
-    parser.add_argument("--axes", nargs="+", choices=("vary_t", "vary_epsilon"))
+    parser.add_argument(
+        "--axes",
+        nargs="+",
+        choices=("vary_t", "vary_epsilon"),
+        default=list(DEFAULT_AXES),
+        help=f"Benchmark axes to run. Default: {' '.join(DEFAULT_AXES)}.",
+    )
     parser.add_argument(
         "--check-mode",
         choices=("polynomial", "approximation", "both"),
-        default="polynomial",
+        default=DEFAULT_CHECK_MODE,
         help=(
             "Use exact generated-polynomial comparison, numerical exp(-iHt) approximation checking, "
-            "or both checks from one symbolic polynomial."
+            f"or both checks from one symbolic polynomial. Default: {DEFAULT_CHECK_MODE}."
         ),
     )
     parser.add_argument(
@@ -146,6 +153,7 @@ def _run_benchmark(
             "approx_max_grid_error": "",
             "approx_worst_x": "",
             "approx_grid_points": "",
+            "approx_beta": "",
             "error": f"timeout after {timeout_sec:g}s",
         }
 
@@ -164,6 +172,7 @@ def _run_benchmark(
         "approx_max_grid_error": "",
         "approx_worst_x": "",
         "approx_grid_points": "",
+        "approx_beta": "",
         "error": f"worker exited with code {process.exitcode}",
     }
 
@@ -198,6 +207,7 @@ def _run_benchmark_inner(
     approx_max_grid_error = ""
     approx_worst_x = ""
     approx_grid_points = ""
+    approx_beta = ""
     symbolic_runtime_sec = ""
     approx_runtime_sec = ""
     qasm_path = ROOT / row["qasm_path"]
@@ -236,7 +246,7 @@ def _run_benchmark_inner(
                 raise ValueError(f"{check_mode} check mode expected a generated QSP polynomial")
             approx_started = time.perf_counter()
             approximation = verify_polynomial_approximates_exp(
-                rescale_polynomial_for_target(result.qsp_polynomial, row["target_scale"]),
+                result.qsp_polynomial,
                 tau=float(row["tau"]),
                 epsilon=float(row["epsilon"]),
                 max_grid_points=max_approx_grid_points,
@@ -245,6 +255,7 @@ def _run_benchmark_inner(
             approx_max_grid_error = f"{approximation.max_grid_error:.12g}"
             approx_worst_x = f"{approximation.worst_x:.12g}"
             approx_grid_points = str(approximation.num_grid_points)
+            approx_beta = _format_complex(approximation.beta)
             if check_mode == "both":
                 status = PASS if result.status == PASS and approximation.success else "FAIL"
             else:
@@ -254,6 +265,7 @@ def _run_benchmark_inner(
             approx_max_grid_error = f"{result.qsp_approximation.max_grid_error:.12g}"
             approx_worst_x = f"{result.qsp_approximation.worst_x:.12g}"
             approx_grid_points = str(result.qsp_approximation.num_grid_points)
+            approx_beta = _format_complex(result.qsp_approximation.beta)
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
     runtime_sec = time.perf_counter() - started
@@ -272,6 +284,7 @@ def _run_benchmark_inner(
         "approx_max_grid_error": approx_max_grid_error,
         "approx_worst_x": approx_worst_x,
         "approx_grid_points": approx_grid_points,
+        "approx_beta": approx_beta,
         "error": error,
     }
 
@@ -321,6 +334,7 @@ def _skipped_after_timeout(row: dict[str, str], check_mode: str) -> dict[str, st
         "approx_max_grid_error": "",
         "approx_worst_x": "",
         "approx_grid_points": "",
+        "approx_beta": "",
         "error": "previous benchmark in this axis timed out",
     }
 
@@ -353,8 +367,15 @@ def _fieldnames() -> list[str]:
         "approx_max_grid_error",
         "approx_worst_x",
         "approx_grid_points",
+        "approx_beta",
         "error",
     ]
+
+
+def _format_complex(value: complex) -> str:
+    if abs(value.imag) <= 1e-14:
+        return f"{value.real:.12g}"
+    return f"{value.real:.12g}{value.imag:+.12g}i"
 
 
 def _parse_int_list(text: str) -> tuple[int, ...]:

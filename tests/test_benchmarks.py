@@ -1,4 +1,7 @@
 from pathlib import Path
+import re
+
+import mpmath as mp
 
 from symbolic.verify import PASS_EXACT, verify_qasm_file
 from tools.benchmarks import hamsim_suite, make_hamiltonian, write_block_encoding_qasm
@@ -54,6 +57,20 @@ def test_heisenberg_block_encoding_generator_verifies_y_terms(tmp_path: Path):
     )
 
     assert result.status == PASS_EXACT
+
+
+def test_block_encoding_generator_can_emit_high_precision_angles(tmp_path: Path):
+    benchmark = make_hamiltonian("ising", 3)
+    qasm_path = tmp_path / "ising_periodic_n3.qasm"
+    write_block_encoding_qasm(benchmark, qasm_path, angle_precision=60)
+
+    match = re.search(r"ry\((-?[0-9]+\.[0-9]+)", qasm_path.read_text(encoding="utf-8"))
+    angles = re.findall(r"ry\((-?[0-9]+\.[0-9]+)", qasm_path.read_text(encoding="utf-8"))
+
+    assert match is not None
+    assert len(match.group(1).replace("-", "").replace(".", "")) >= 55
+    with mp.workdps(80):
+        assert abs(mp.mpf(angles[1]) - mp.pi / 4) < mp.mpf("1e-55")
 
 
 def test_hamsim_suite_pins_the_intended_axis_variables():

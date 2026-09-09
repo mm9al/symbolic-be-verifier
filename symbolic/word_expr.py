@@ -227,7 +227,7 @@ def _sort_key(word: Word) -> Tuple[int, Tuple[int, ...]]:
 
 
 def _format_term(word: Word, coeff: sp.Expr) -> str:
-    coeff = scalar_simplify(coeff)
+    coeff = sp.sympify(scalar_simplify(coeff))
     body = "I" if not word else " ".join(word)
     if coeff == 1:
         return body

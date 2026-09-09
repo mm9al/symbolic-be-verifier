@@ -67,9 +67,10 @@ Run the symbolic block-encoding evaluation:
 The block-encoding evaluation uses the paper's final proportionality check by
 default: it treats the manifest Hamiltonian as `H`, infers the real positive
 subnormalization factor `alpha`, and checks the coefficient residual with
-`epsilon = 1e-8` plus a `1e-12` numerical residual floor for decimal QASM
-rotation angles. Pass `--check-mode exact` only to reproduce the older
-normalized top-left-block comparison.
+`epsilon = 1e-8` against the paper threshold `epsilon / 2^(n/2)`. The optional
+`--block-encoding-residual-tolerance` floor defaults to `0`; pass
+`--check-mode exact` only to reproduce the older normalized top-left-block
+comparison.
 
 Results are written to `evaluation/results/block_encoding_results.csv`. For a
 quick smoke suite, pass a smaller size list such as:
@@ -284,10 +285,13 @@ approximately:
 ```
 
 The hamsim route checks the final symbolic polynomial numerically against
-`scale * exp(-i*x*tau)` on `[-1, 1]`. The verifier computes
-`L = max_{x in [-1,1]} |f'(x)|` numerically, chooses a uniform grid with spacing
-at most `epsilon / (L + |scale*tau|)`, and accepts when every grid point has
-error at most `epsilon/2`.
+`exp(-i*x*tau)` on `[-1, 1]`. The verifier first chooses the scalar
+`beta = <p,e> / ||p||^2` on the grid, where `e_m = exp(-i*x_m*tau)`, then uses
+the paper grid
+`D = ceil(e*|tau|/2 + log(32/epsilon))` and
+`M = 4*max(D, degree)` with Chebyshev roots
+`x_m = cos((2m - 1)*pi/(2M))` for `m = 1..M`. It accepts when every
+`|beta*p(x_m) - e_m|` is at most `epsilon/2`.
 
 The checked-in degree-3 full Hamiltonian simulation fixture uses:
 
@@ -308,7 +312,6 @@ Verify the degree-3 fixture with:
   --systems 'q[4]' \
   --hamsim-tau 0.5 \
   --hamsim-epsilon 0.1 \
-  --hamsim-scale 0.25 \
   --hermitian-base \
   --result-only
 ```
@@ -322,7 +325,6 @@ Verify the degree-5 fixture with:
   --systems 'q[4]' \
   --hamsim-tau 0.5 \
   --hamsim-epsilon 1e-4 \
-  --hamsim-scale 0.25 \
   --hermitian-base \
   --result-only
 ```
@@ -337,7 +339,6 @@ time .venv/bin/python -m symbolic.verify \
   --systems 'q[4]' \
   --hamsim-tau 0.5 \
   --hamsim-epsilon 0.1 \
-  --hamsim-scale 0.25 \
   --hermitian-base \
   --result-only
 ```

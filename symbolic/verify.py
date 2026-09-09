@@ -28,6 +28,7 @@ FAIL = "FAIL"
 FAIL_GARBAGE = "FAIL_GARBAGE"
 DEFAULT_TOLERANCE = 1e-8
 DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE = 1e-12
+DEFAULT_BLOCK_ENCODING_CHECK_PRECISION = 60
 DEFAULT_MAX_APPROXIMATION_GRID_POINTS = 10_000_000
 
 
@@ -56,10 +57,10 @@ class ApproximationCheck:
     tau: float
     epsilon: float
     scale: sp.Expr
+    beta: complex
     polynomial_degree: int
-    polynomial_derivative_bound: float
-    target_lipschitz: float
-    spacing: float
+    approximation_degree: int
+    angular_spacing: float
     num_grid_points: int
     max_grid_error: float
     worst_x: float
@@ -71,6 +72,18 @@ class ApproximationCheck:
     @property
     def polynomial_lipschitz(self) -> float:
         return self.polynomial_derivative_bound
+
+    @property
+    def polynomial_derivative_bound(self) -> float:
+        return float(self.approximation_degree)
+
+    @property
+    def target_lipschitz(self) -> float:
+        return abs(complex(sp.N(self.scale, 50)) * self.tau)
+
+    @property
+    def spacing(self) -> float:
+        return self.angular_spacing
 
 
 @dataclass(frozen=True)
@@ -87,7 +100,7 @@ class BlockEncodingProportionalityCheck:
 
     @property
     def success(self) -> bool:
-        return self.alpha > 0 and self.residual_norm <= self.acceptance_threshold
+        return bool(self.alpha > 0 and self.residual_norm <= self.acceptance_threshold)
 
 
 @dataclass(frozen=True)
@@ -332,7 +345,7 @@ def verify_qasm_file(
 
     if target_exp_tau is not None and qsp_status != FAIL_GARBAGE:
         qsp_approximation = verify_polynomial_approximates_exp(
-            rescale_polynomial_for_target(qsp_polynomial, target_exp_scale),
+            qsp_polynomial,
             tau=target_exp_tau,
             epsilon=target_exp_epsilon,
             max_grid_points=max_approx_grid_points,
@@ -431,16 +444,17 @@ def format_result(result: VerificationResult, *, show_trace: bool = False) -> st
             lines.append(f"Expected evaluated = {result.qsp_expected}")
         if result.qsp_approximation is not None:
             check = result.qsp_approximation
-            lines.append(
-                "Approximation target = "
-                f"{_format_scalar(check.scale)} * exp(-i*x*{check.tau:.12g})"
-            )
+            if scalar_close(check.scale, 1):
+                target_label = f"exp(-i*x*{check.tau:.12g})"
+            else:
+                target_label = f"{_format_scalar(check.scale)} * exp(-i*x*{check.tau:.12g})"
+            lines.append(f"Approximation target = {target_label}")
+            lines.append(f"Approximation beta = {_format_complex(check.beta)}")
             lines.append(f"Approximation epsilon = {check.epsilon:.12g}")
             lines.append(f"Approximation polynomial degree = {check.polynomial_degree}")
-            lines.append(f"Approximation polynomial derivative bound = {check.polynomial_derivative_bound:.12g}")
-            lines.append(f"Approximation target Lipschitz = {check.target_lipschitz:.12g}")
-            lines.append(f"Approximation grid spacing = {check.spacing:.12g}")
-            lines.append(f"Approximation grid points = {check.num_grid_points}")
+            lines.append(f"Approximation Chebyshev degree D = {check.approximation_degree}")
+            lines.append(f"Approximation grid angular spacing = {check.angular_spacing:.12g}")
+            lines.append(f"Approximation grid roots = {check.num_grid_points}")
             lines.append(f"Approximation max grid error = {check.max_grid_error:.12g} at x = {check.worst_x:.12g}")
         if result.qsp_status is not None:
             lines.append(result.qsp_status)
@@ -567,29 +581,40 @@ def verify_polynomial_approximates_exp(
     scale_value = complex(sp.N(scale_expr, 50))
     coeffs = _complex_polynomial_coefficients(parsed)
     polynomial_degree = len(coeffs) - 1
-    polynomial_derivative_bound = float(polynomial_degree)
-    target_lipschitz = abs(scale_value * tau)
-    intervals = max(1, math.ceil(math.pi * (target_lipschitz + polynomial_derivative_bound) / epsilon))
-    num_grid_points = intervals + 1
+    approximation_degree = hamsim_chebyshev_approximation_degree(tau=tau, epsilon=epsilon)
+    num_grid_points = hamsim_approximation_grid_size(
+        tau=tau,
+        epsilon=epsilon,
+        polynomial_degree=polynomial_degree,
+    )
     if max_grid_points is not None:
-        if max_grid_points < 2:
-            raise ValueError("max_grid_points must be at least 2, or None to disable the guard")
+        if max_grid_points < 1:
+            raise ValueError("max_grid_points must be at least 1, or None to disable the guard")
         if num_grid_points > max_grid_points:
             raise ValueError(
                 "Approximation grid requires "
-                f"{num_grid_points} Chebyshev points by M >= pi*(|scale|*tau + d)/epsilon "
-                f"(degree={polynomial_degree}, target_lipschitz={target_lipschitz:.12g}, epsilon={epsilon:.12g}); "
+                f"{num_grid_points} Chebyshev roots by M = 4*max(D,d) "
+                f"(D={approximation_degree}, degree={polynomial_degree}, tau={tau:.12g}, epsilon={epsilon:.12g}); "
                 f"max_grid_points is {max_grid_points}"
             )
-    spacing = math.pi / intervals
+    angular_spacing = math.pi / num_grid_points
+
+    grid_values: list[tuple[float, complex, complex]] = []
+    inner_product = 0j
+    polynomial_norm_sq = 0.0
+    for index in range(1, num_grid_points + 1):
+        point = math.cos((2 * index - 1) * math.pi / (2 * num_grid_points))
+        actual = _eval_complex_polynomial(coeffs, point)
+        expected = scale_value * cmath.exp(-1j * point * tau)
+        grid_values.append((point, actual, expected))
+        inner_product += actual.conjugate() * expected
+        polynomial_norm_sq += abs(actual) ** 2
+    beta = 0j if polynomial_norm_sq == 0 else inner_product / polynomial_norm_sq
 
     max_error = -1.0
     worst_x = -1.0
-    for index in range(intervals + 1):
-        point = math.cos(index * math.pi / intervals)
-        actual = _eval_complex_polynomial(coeffs, point)
-        expected = scale_value * cmath.exp(-1j * point * tau)
-        error = abs(actual - expected)
+    for point, actual, expected in grid_values:
+        error = abs(beta * actual - expected)
         if error > max_error:
             max_error = error
             worst_x = point
@@ -598,14 +623,27 @@ def verify_polynomial_approximates_exp(
         tau=tau,
         epsilon=epsilon,
         scale=scale_expr,
+        beta=beta,
         polynomial_degree=polynomial_degree,
-        polynomial_derivative_bound=polynomial_derivative_bound,
-        target_lipschitz=target_lipschitz,
-        spacing=spacing,
+        approximation_degree=approximation_degree,
+        angular_spacing=angular_spacing,
         num_grid_points=num_grid_points,
         max_grid_error=max_error,
         worst_x=worst_x,
     )
+
+
+def hamsim_chebyshev_approximation_degree(*, tau: float, epsilon: float) -> int:
+    if epsilon <= 0:
+        raise ValueError("epsilon must be positive")
+    return max(0, math.ceil(math.e * abs(tau) / 2 + math.log(32 / epsilon)))
+
+
+def hamsim_approximation_grid_size(*, tau: float, epsilon: float, polynomial_degree: int) -> int:
+    if polynomial_degree < 0:
+        raise ValueError("polynomial_degree must be nonnegative")
+    approximation_degree = hamsim_chebyshev_approximation_degree(tau=tau, epsilon=epsilon)
+    return max(1, 4 * max(approximation_degree, polynomial_degree))
 
 
 def normalize_qsp_expression(expr: WordExpr, *, hermitian_base: bool = False) -> WordExpr:
@@ -810,12 +848,14 @@ def block_encoding_proportionality_check(
     if residual_tolerance < 0:
         raise ValueError("residual_tolerance must be nonnegative")
 
+    precision = DEFAULT_BLOCK_ENCODING_CHECK_PRECISION
     actual, target = _align_operator_qubits(actual, target)
     actual_terms = _nonzero_terms(actual)
     target_terms = _nonzero_terms(target)
     pauli_strings = set(actual_terms) | set(target_terms)
-    threshold = epsilon / (2 ** (actual.num_qubits / 2))
-    acceptance_threshold = max(threshold, residual_tolerance)
+    threshold = sp.N(sp.Float(str(epsilon), precision) / sp.sqrt(sp.Integer(2) ** actual.num_qubits), precision)
+    residual_tolerance_value = sp.Float(str(residual_tolerance), precision)
+    acceptance_threshold = max(threshold, residual_tolerance_value)
     if not pauli_strings:
         return BlockEncodingProportionalityCheck(
             epsilon=epsilon,
@@ -829,14 +869,26 @@ def block_encoding_proportionality_check(
             target_norm=0.0,
         )
 
-    actual_coeffs: dict[tuple[str, ...], complex] = {}
-    target_coeffs: dict[tuple[str, ...], complex] = {}
+    actual_coeffs: dict[tuple[str, ...], sp.Expr] = {}
+    target_coeffs: dict[tuple[str, ...], sp.Expr] = {}
     for pauli_string in pauli_strings:
-        actual_coeffs[pauli_string] = _coefficient_as_complex(actual_terms.get(pauli_string, sp.Integer(0)))
-        target_coeffs[pauli_string] = _coefficient_as_complex(target_terms.get(pauli_string, sp.Integer(0)))
+        actual_coeffs[pauli_string] = _coefficient_as_numeric(
+            actual_terms.get(pauli_string, sp.Integer(0)),
+            precision=precision,
+        )
+        target_coeffs[pauli_string] = _coefficient_as_numeric(
+            target_terms.get(pauli_string, sp.Integer(0)),
+            precision=precision,
+        )
 
-    actual_norm_sq = sum(abs(coeff) ** 2 for coeff in actual_coeffs.values())
-    target_norm_sq = sum(abs(coeff) ** 2 for coeff in target_coeffs.values())
+    actual_norm_sq = _numeric_check_value(
+        sum(_abs_square(coeff, precision=precision) for coeff in actual_coeffs.values()),
+        precision=precision,
+    )
+    target_norm_sq = _numeric_check_value(
+        sum(_abs_square(coeff, precision=precision) for coeff in target_coeffs.values()),
+        precision=precision,
+    )
     if actual_norm_sq == 0 or target_norm_sq == 0:
         return BlockEncodingProportionalityCheck(
             epsilon=epsilon,
@@ -846,19 +898,28 @@ def block_encoding_proportionality_check(
             threshold=threshold,
             numerical_tolerance=residual_tolerance,
             acceptance_threshold=acceptance_threshold,
-            coefficient_norm=math.sqrt(actual_norm_sq),
-            target_norm=math.sqrt(target_norm_sq),
+            coefficient_norm=_numeric_check_value(sp.sqrt(actual_norm_sq), precision=precision),
+            target_norm=_numeric_check_value(sp.sqrt(target_norm_sq), precision=precision),
         )
 
-    inner = sum(actual_coeffs[key].conjugate() * target_coeffs[key] for key in pauli_strings)
-    actual_norm = math.sqrt(actual_norm_sq)
-    projection_length = inner.real / actual_norm
-    alpha = projection_length / actual_norm
+    inner = _numeric_check_value(
+        sum(sp.conjugate(actual_coeffs[key]) * target_coeffs[key] for key in pauli_strings),
+        precision=precision,
+    )
+    actual_norm = _numeric_check_value(sp.sqrt(actual_norm_sq), precision=precision)
+    projection_length = _numeric_check_value(sp.re(inner) / actual_norm, precision=precision)
+    alpha = _numeric_check_value(projection_length / actual_norm, precision=precision)
     if alpha <= 0:
         residual_norm = math.inf
     else:
-        residual_norm = math.sqrt(
-            sum(abs(alpha * actual_coeffs[key] - target_coeffs[key]) ** 2 for key in pauli_strings)
+        residual_norm = _numeric_check_value(
+            sp.sqrt(
+                sum(
+                    _abs_square(alpha * actual_coeffs[key] - target_coeffs[key], precision=precision)
+                    for key in pauli_strings
+                )
+            ),
+            precision=precision,
         )
 
     return BlockEncodingProportionalityCheck(
@@ -870,12 +931,22 @@ def block_encoding_proportionality_check(
         numerical_tolerance=residual_tolerance,
         acceptance_threshold=acceptance_threshold,
         coefficient_norm=actual_norm,
-        target_norm=math.sqrt(target_norm_sq),
+        target_norm=_numeric_check_value(sp.sqrt(target_norm_sq), precision=precision),
     )
 
 
-def _coefficient_as_complex(value: sp.Expr) -> complex:
-    return complex(sp.N(value, 50))
+def _coefficient_as_numeric(value: sp.Expr, *, precision: int) -> sp.Expr:
+    return sp.N(value, precision)
+
+
+def _abs_square(value: sp.Expr, *, precision: int) -> sp.Expr:
+    return sp.N(sp.re(sp.conjugate(value) * value), precision)
+
+
+def _numeric_check_value(value: sp.Expr, *, precision: int) -> sp.Expr:
+    if value == 0:
+        return sp.Float(0, precision)
+    return sp.N(value, precision)
 
 
 def _align_operator_qubits(actual: OpExpr, expected: OpExpr) -> Tuple[OpExpr, OpExpr]:
@@ -891,6 +962,11 @@ def _format_scalar(value: Optional[sp.Expr]) -> str:
     if value is None:
         return "None"
     return sp.sstr(scalar_simplify(value)).replace("I", "i")
+
+
+def _format_complex(value: complex) -> str:
+    expr = sp.N(value.real, 16) + sp.N(value.imag, 16) * sp.I
+    return _format_scalar(expr)
 
 
 def _normalize_systems(*, system: int, systems: Optional[Sequence[int]]) -> Tuple[int, ...]:
@@ -968,7 +1044,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "--hamsim-scale",
         dest="target_exp_scale",
         default=argparse.SUPPRESS,
-        help="Hamiltonian-simulation route: scalar multiplier for exp(-i*x*t).",
+        help="Deprecated Hamiltonian-simulation route scale; the approximation check now infers beta from the grid.",
     )
     parser.add_argument(
         "--max-approx-grid-points",

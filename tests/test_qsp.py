@@ -20,6 +20,8 @@ from symbolic.qsp import (
     qasm_phase_data,
 )
 from symbolic.verify import PASS, eval_polynomial_on_pauliop, parse_polynomial, pauli_expr_close, polynomial_close, verify_qasm_file
+from symbolic.verify import scalar_close
+from symbolic.word_expr import WordExpr, atom as word_atom
 
 
 ROOT = Path(__file__).parents[1]
@@ -27,12 +29,18 @@ QSP_EXAMPLE_DIR = ROOT / "examples" / "qsp_hamsim_t05_eps1e-4"
 QSP_M2_EXAMPLE_DIR = ROOT / "examples" / "qsp_hamsim_t05_eps1e-4_m2"
 QSP_FULL_EXAMPLE_DIR = ROOT / "examples" / "qsp_hamsim_full_t05_eps01"
 QSP_FULL_XYZ_EXAMPLE_DIR = ROOT / "examples" / "qsp_hamsim_full_xyz_t05_eps01"
+TEACHER_QSP_EXAMPLE = ROOT / "examples" / "qsp_teacher_degree4.qasm"
 
 COS_POLYNOMIAL = "0.49999966355545339 - 0.062493938728279574*x^2 + 0.0012858918109143005*x^4"
 SIN_POLYNOMIAL = "0.24999991579484243*x - 0.010415992523176125*x^3 + 0.00012885803586171963*x^5"
 FULL_HAMSIM_DEG3_POLYNOMIAL = (
     "0.24991946353954456 - 0.12497982382931781*i*x "
     "- 0.030604023458682638*x^2 + 0.005127459989174488*i*x^3"
+)
+TEACHER_DEGREE4_POLYNOMIAL = (
+    "0.996542097023218 - 0.0830894028174966*i "
+    "+ (-2.00069906686298 - 4.2549773224718*i)*x^2 "
+    "+ (0.588010133292623 + 5.24736415211498*i)*x^4"
 )
 RAW_COS_COMPONENT_Y_RESPONSE = "exp(67374387816677681*i/10000000000000000)"
 
@@ -327,7 +335,8 @@ def test_full_hamsim_generated_qasm_verifies_for_multiple_block_ancillas(tmp_pat
     assert approximate_result.status == PASS
     assert approximate_result.qsp_approximation is not None
     assert approximate_result.qsp_approximation.epsilon == pytest.approx(1e-3)
-    assert approximate_result.qsp_approximation.num_grid_points == 10997
+    assert approximate_result.qsp_approximation.beta == pytest.approx(4.0 + 0j)
+    assert approximate_result.qsp_approximation.num_grid_points == 48
     assert approximate_result.qsp_approximation.max_grid_error <= 5e-4
     _verify_qasm_dense_on_base(
         qasm_path,
@@ -359,6 +368,109 @@ def test_qsp_mcx_t3_passes_for_block_ancillas(qasm_path, ancillas, systems):
     assert polynomial_close(result.qsp_polynomial, "4*x^3 - 3*x")
 
 
+def test_teacher_degree4_qsp_example_matches_hand_symbolic_table():
+    gates = parse_qasm_file(TEACHER_QSP_EXAMPLE)
+    phase_sandwich = ["x", "cx", "x", "rz", "x", "cx", "x"]
+    assert [gate.name for gate in gates] == (
+        phase_sandwich
+        + ["uh"]
+        + phase_sandwich
+        + ["uhdg"]
+        + phase_sandwich
+        + ["uh"]
+        + phase_sandwich
+        + ["uhdg"]
+        + phase_sandwich
+    )
+    assert [float(gate.parameter) for gate in gates if gate.name == "rz"] == pytest.approx(
+        [4.60, -2.10, 2.14, -2.10, 1.46]
+    )
+
+    result = verify_qasm_file(
+        TEACHER_QSP_EXAMPLE,
+        ancillas=(0, 1),
+        systems=(2,),
+        expected_polynomial=TEACHER_DEGREE4_POLYNOMIAL,
+        hermitian_base=True,
+        compare_polynomial_only=True,
+        keep_trace=True,
+    )
+
+    assert result.status == PASS
+    assert polynomial_close(result.qsp_polynomial, TEACHER_DEGREE4_POLYNOMIAL)
+
+    states = [step.state for step in result.trace]
+    _assert_word_branch(states[3], (1, 0), _word("I"))
+    _assert_word_branch(states[4], (1, 0), _scaled_phase("2.30", _word("I")))
+    _assert_word_branch(states[7], (0, 0), _scaled_phase("2.30", _word("I")))
+
+    _assert_word_branch(states[8], (0, 0), _scaled_phase("2.30", _word("H")))
+    _assert_word_branch(states[8], (0, 1), _scaled_phase("2.30", _word("A")))
+
+    _assert_word_branch(states[11], (0, 1), _scaled_phase("2.30", _word("A")))
+    _assert_word_branch(states[11], (1, 0), _scaled_phase("2.30", _word("H")))
+    _assert_word_branch(states[12], (0, 1), _scaled_phase("3.35", _word("A")))
+    _assert_word_branch(states[12], (1, 0), _scaled_phase("1.25", _word("H")))
+    _assert_word_branch(states[15], (0, 0), _scaled_phase("1.25", _word("H")))
+    _assert_word_branch(states[15], (0, 1), _scaled_phase("3.35", _word("A")))
+
+    _assert_word_branch(
+        states[16],
+        (0, 0),
+        _scaled_phase("1.25", _word("Hd", "H")) + _scaled_phase("3.35", _word("Ad", "A")),
+    )
+    _assert_word_branch(
+        states[16],
+        (0, 1),
+        _scaled_phase("1.25", _word("Gd", "H")) + _scaled_phase("3.35", _word("Cd", "A")),
+    )
+
+    sabbr = _scaled_phase("2.32", _word("Hd", "H")) + _scaled_phase("4.42", _word("Ad", "A"))
+    tabbr = _scaled_phase("0.18", _word("Gd", "H")) + _scaled_phase("2.28", _word("Cd", "A"))
+    _assert_word_branch(states[20], (0, 1), tabbr)
+    _assert_word_branch(states[20], (1, 0), sabbr)
+    _assert_word_branch(states[23], (0, 0), sabbr)
+    _assert_word_branch(states[23], (0, 1), tabbr)
+
+    h_s_plus_g_t = word_atom("H") * sabbr + word_atom("G") * tabbr
+    a_s_plus_c_t = word_atom("A") * sabbr + word_atom("C") * tabbr
+    _assert_word_branch(states[24], (0, 0), h_s_plus_g_t)
+    _assert_word_branch(states[24], (0, 1), a_s_plus_c_t)
+    _assert_word_branch(states[28], (0, 1), _scaled_phase("1.05", a_s_plus_c_t))
+    _assert_word_branch(states[28], (1, 0), _scaled_phase("-1.05", h_s_plus_g_t))
+    _assert_word_branch(states[31], (0, 0), _scaled_phase("-1.05", h_s_plus_g_t))
+    _assert_word_branch(states[31], (0, 1), _scaled_phase("1.05", a_s_plus_c_t))
+
+    final_zero_before_phase = (
+        _scaled_phase("-1.05", word_atom("Hd") * h_s_plus_g_t)
+        + _scaled_phase("1.05", word_atom("Ad") * a_s_plus_c_t)
+    )
+    final_one_before_phase = (
+        _scaled_phase("-1.05", word_atom("Gd") * h_s_plus_g_t)
+        + _scaled_phase("1.05", word_atom("Cd") * a_s_plus_c_t)
+    )
+    _assert_word_branch(states[32], (0, 0), final_zero_before_phase)
+    _assert_word_branch(states[32], (0, 1), final_one_before_phase)
+    _assert_word_branch(
+        states[36],
+        (0, 1),
+        _scaled_phase("-1.78", word_atom("Gd") * h_s_plus_g_t)
+        + _scaled_phase("0.32", word_atom("Cd") * a_s_plus_c_t),
+    )
+    _assert_word_branch(
+        states[36],
+        (1, 0),
+        _scaled_phase("-0.32", word_atom("Hd") * h_s_plus_g_t)
+        + _scaled_phase("1.78", word_atom("Ad") * a_s_plus_c_t),
+    )
+    _assert_word_branch(
+        states[39],
+        (0, 0),
+        _scaled_phase("-0.32", word_atom("Hd") * h_s_plus_g_t)
+        + _scaled_phase("1.78", word_atom("Ad") * a_s_plus_c_t),
+    )
+
+
 def _parse_qreg(qubit: str) -> int:
     prefix = "q["
     assert qubit.startswith(prefix) and qubit.endswith("]")
@@ -367,6 +479,27 @@ def _parse_qreg(qubit: str) -> int:
 
 def _close_list(actual: list[float], expected: list[float]) -> bool:
     return len(actual) == len(expected) and all(math.isclose(a, b) for a, b in zip(actual, expected))
+
+
+def _phase(angle: str) -> sp.Expr:
+    return sp.exp(sp.I * sp.Float(angle))
+
+
+def _word(*atoms: str) -> WordExpr:
+    if not atoms or atoms == ("I",):
+        return WordExpr.identity()
+    return WordExpr({tuple(atoms): sp.Integer(1)})
+
+
+def _scaled_phase(angle: str, expr: WordExpr) -> WordExpr:
+    return expr.scale(_phase(angle))
+
+
+def _assert_word_branch(state, key: tuple[int, ...], expected: WordExpr) -> None:
+    actual = state.branch(key)
+    assert isinstance(actual, WordExpr)
+    diff = actual - expected
+    assert all(scalar_close(coeff, 0, tol=1e-8) for coeff in diff.terms.values()), f"{actual} != {expected}"
 
 
 def _full_hamsim_record_from_qasm(qasm_path: Path) -> dict:

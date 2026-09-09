@@ -16,6 +16,8 @@ from sympy.parsing.sympy_parser import (
 
 from . import profile
 
+_DOUBLE_FLOAT_PRECISION_BITS = 64
+
 
 def parse_scalar(text: str) -> sp.Expr:
     """Parse a scalar expression used in QASM parameters or coefficients."""
@@ -51,15 +53,32 @@ def _scalar_simplify_impl(expr: sp.Expr) -> sp.Expr:
         return expr
 
     sympified = sp.sympify(expr)
+    float_precision = _max_float_precision(sympified)
     if getattr(sympified, "is_Float", False):
-        return float(sympified)
-    if isinstance(sympified, sp.Basic) and sympified.has(sp.Float):
+        if float_precision <= _DOUBLE_FLOAT_PRECISION_BITS:
+            return float(sympified)
+        return sympified
+    if float_precision > 0:
         if sympified.is_number:
-            value = complex(sympified.evalf())
-            return value.real if value.imag == 0 else value
+            if float_precision <= _DOUBLE_FLOAT_PRECISION_BITS:
+                value = complex(sympified.evalf())
+                return value.real if value.imag == 0 else value
+            return sympified.evalf(_decimal_digits_for_binary_precision(float_precision))
         return sympified
 
     return _scalar_simplify_cached(sympified)
+
+
+def _max_float_precision(expr: sp.Expr) -> int:
+    if getattr(expr, "is_Float", False):
+        return int(expr._prec)
+    if isinstance(expr, sp.Basic) and expr.has(sp.Float):
+        return max(int(value._prec) for value in expr.atoms(sp.Float))
+    return 0
+
+
+def _decimal_digits_for_binary_precision(precision: int) -> int:
+    return max(17, math.ceil(precision * math.log10(2)) + 2)
 
 
 @lru_cache(maxsize=1_000_000)
@@ -168,6 +187,11 @@ def exp_plus_i_half(theta: sp.Expr) -> sp.Expr:
 def _numeric_float(theta: sp.Expr) -> float | None:
     if isinstance(theta, float):
         return theta
-    if isinstance(theta, sp.Basic) and theta.has(sp.Float) and theta.is_number:
+    if (
+        isinstance(theta, sp.Basic)
+        and theta.has(sp.Float)
+        and theta.is_number
+        and _max_float_precision(theta) <= _DOUBLE_FLOAT_PRECISION_BITS
+    ):
         return float(theta.evalf())
     return None
