@@ -20,9 +20,10 @@ evaluation/bug_detection/results/hamsim_bug_detection_results.csv
 
 The RQ1 CSV uses the same fields as `evaluation/results/block_encoding_results.csv`.
 The RQ2 CSV uses the same fields as `evaluation/results/hamsim_results.csv`.
-Both append only one final field, `bug_detection_result`. Its value is
-`success` only when the case has an injected bug and the verifier returns
-`FAIL`; all other cases are marked `unsuccess`.
+Both append only one final field, `bug_detection_result`. Its value is one of
+`True Positive`, `False Negative`, `True Negative`, or `False Positive`, based
+on whether the case has an injected bug and whether the verifier returns
+`FAIL` or `PASS`.
 
 Covered mutation families:
 

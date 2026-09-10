@@ -201,7 +201,10 @@ def _hamsim_bug_detection_result(case: BugCase, result: dict[str, str]) -> str:
 
 
 def _bug_detection_result(case: BugCase, result: dict[str, str]) -> str:
-    return "success" if case.intended_bug and result["status"] == "FAIL" else "unsuccess"
+    detected_bug = result["status"] == "FAIL"
+    if case.intended_bug:
+        return "True Positive" if detected_bug else "False Negative"
+    return "False Positive" if detected_bug else "True Negative"
 
 
 def _write_rows(path: Path, fieldnames: list[str], rows: list[dict[str, str]]) -> None:
