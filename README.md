@@ -151,7 +151,19 @@ Verification results:
 - `FAIL`: final all-zero branch is neither exactly equal nor equal up to a scalar.
 
 Numeric coefficient comparisons use a default absolute tolerance of `1e-8`.
-Override it with `--tolerance` when running `symbolic.verify`.
+Override it with `--tolerance` when running `symbolic.verify`. Decimal QASM
+parameters and every inexact coefficient derived from them are propagated with
+python-flint Arb/Acb ball arithmetic (at least 60 decimal digits by default,
+automatically raised to two digits per system qubit for large circuits). A numeric
+comparison passes only when the rigorous upper bound on the residual is no
+larger than the rigorous lower bound on the acceptance threshold. If the two
+intervals overlap, the verifier conservatively returns `FAIL`; it never accepts
+from the midpoint alone.
+
+Ball arithmetic certifies rounding error in the implemented computation. It
+does not remove modelling error, finite precision already present in generated
+QASM angle literals, or the approximation/discretization assumptions of a
+verification route.
 
 ## Verification Routes
 
@@ -194,12 +206,26 @@ theta_rz = -2 * psi
 Use `--compare-polynomial-only` to compare polynomial coefficients directly
 instead of evaluating the polynomial on `--base`.
 
-For QSP polynomial checks, the verifier first normalizes the all-zero branch
-with the oriented block-unitarity rewrite rules. With `--hermitian-base`, it
+For QSP polynomial checks, the verifier eagerly applies the oriented
+block-unitarity rewrite rules after every QSP signal step, preventing unreduced
+word expressions from accumulating across the circuit. It normalizes the
+all-zero branch once more at the end. Pass `--defer-qsp-rewrite` only when an
+unreduced intermediate trace is needed. With `--hermitian-base`, the verifier
 also rewrites `Hd` to `H`. The normalized expression must then be a polynomial
 in `H` only, i.e. a linear combination of `I`, `H`, `H H`, `H H H`, and so on.
 If any `A`, `G`, `C`, adjoint garbage block, or unreduced `Hd` remains, the
 check fails before comparing coefficients with the target polynomial.
+
+QSP verification uses Arb/Acb balls with a 60-decimal-digit minimum for parsing
+physical QASM rotation angles, trigonometric coefficients, coefficient
+propagation, and the final Hamiltonian-simulation approximation grid. This
+avoids severe monomial-basis cancellation at larger degrees while retaining a
+rounding-error enclosure. Override the minimum with
+`--qsp-calculation-precision` when deliberately testing another precision.
+Generated physical QSP rotations contain 17 significant digits, matching the
+meaningful precision available from pyqsp's binary64 phase synthesis; the
+ball verifier preserves those input values without inventing extra phase
+digits.
 
 Ordinary QSP verification example:
 
@@ -290,8 +316,9 @@ The hamsim route checks the final symbolic polynomial numerically against
 the paper grid
 `D = ceil(e*|tau|/2 + log(32/epsilon))` and
 `M = 4*max(D, degree)` with Chebyshev roots
-`x_m = cos((2m - 1)*pi/(2M))` for `m = 1..M`. It accepts when every
-`|beta*p(x_m) - e_m|` is at most `epsilon/2`.
+`x_m = cos((2m - 1)*pi/(2M))` for `m = 1..M`. Arb certifies `D`, the roots,
+the fitted `beta`, and each complex residual. It accepts only when the maximum
+rigorous residual upper bound is at most the lower bound of `epsilon/2`.
 
 The checked-in degree-3 full Hamiltonian simulation fixture uses:
 

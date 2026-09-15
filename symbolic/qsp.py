@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Any
 
 
+QSP_QASM_ANGLE_PRECISION = 17
+
+
 @dataclass(frozen=True)
 class QasmGate:
     name: str
@@ -198,9 +201,9 @@ def qasm_snippet(
     system_qubits = _normalize_qubit_list(system_qubits, label="system qubit")
     lines: list[str] = []
     for idx, (phase, psi, theta) in enumerate(zip(pyqsp_phases, qsvt_projector_phases, qasm_rz_angles)):
-        lines.append(f"// phi_{idx} = {phase:.12g}")
-        lines.append(f"// psi_{idx} = {psi:.12g}")
-        lines.append(f"// theta_rz_{idx} = -2 * psi_{idx} = {theta:.12g}")
+        lines.append(f"// phi_{idx} = {phase:.{QSP_QASM_ANGLE_PRECISION}g}")
+        lines.append(f"// psi_{idx} = {psi:.{QSP_QASM_ANGLE_PRECISION}g}")
+        lines.append(f"// theta_rz_{idx} = -2 * psi_{idx} = {theta:.{QSP_QASM_ANGLE_PRECISION}g}")
         lines.extend(_phase_block(theta, phase_qubit, block_ancillas))
         if idx == len(pyqsp_phases) - 1:
             continue
@@ -273,7 +276,7 @@ def selector_qasm_snippet(
 
     lines.append(f"z {selector_qubit};")
     lines.append(f"h {selector_qubit};")
-    lines.append(f"rz(3.14159265359) {selector_qubit};")
+    lines.append(f"rz({math.pi:.{QSP_QASM_ANGLE_PRECISION}g}) {selector_qubit};")
     return "\n".join(lines)
 
 
@@ -307,11 +310,11 @@ def full_hamsim_qasm_snippet(
         sin_psi = sin_record["qsvt_projector_phases"][idx]
         delta = clean_float(sin_psi - cos_psi)
         lines.append(f"// common phase {idx}")
-        lines.append(f"// cos phi_{idx} = {cos_record['pyqsp_phases'][idx]:.12g}")
-        lines.append(f"// cos psi_{idx} = {cos_psi:.12g}")
-        lines.append(f"// sin phi_{idx} = {sin_record['pyqsp_phases'][idx]:.12g}")
-        lines.append(f"// sin psi_{idx} = {sin_psi:.12g}")
-        lines.append(f"// Delta_{idx} = sin psi_{idx} - cos psi_{idx} = {delta:.12g}")
+        lines.append(f"// cos phi_{idx} = {cos_record['pyqsp_phases'][idx]:.{QSP_QASM_ANGLE_PRECISION}g}")
+        lines.append(f"// cos psi_{idx} = {cos_psi:.{QSP_QASM_ANGLE_PRECISION}g}")
+        lines.append(f"// sin phi_{idx} = {sin_record['pyqsp_phases'][idx]:.{QSP_QASM_ANGLE_PRECISION}g}")
+        lines.append(f"// sin psi_{idx} = {sin_psi:.{QSP_QASM_ANGLE_PRECISION}g}")
+        lines.append(f"// Delta_{idx} = sin psi_{idx} - cos psi_{idx} = {delta:.{QSP_QASM_ANGLE_PRECISION}g}")
         lines.extend(
             _base_signed_phase(
                 cos_psi,
@@ -349,8 +352,8 @@ def full_hamsim_qasm_snippet(
     lines.append(f"{controlled_signal_gate} {_format_gate_operands([selector_qubit, *block_ancillas, *system_qubits])};")
     lines.append("")
     lines.append(f"// final sin-only phase {final_idx}")
-    lines.append(f"// sin phi_{final_idx} = {sin_record['pyqsp_phases'][final_idx]:.12g}")
-    lines.append(f"// sin psi_{final_idx} = {final_sin_psi:.12g}")
+    lines.append(f"// sin phi_{final_idx} = {sin_record['pyqsp_phases'][final_idx]:.{QSP_QASM_ANGLE_PRECISION}g}")
+    lines.append(f"// sin psi_{final_idx} = {final_sin_psi:.{QSP_QASM_ANGLE_PRECISION}g}")
     lines.extend(
         _controlled_signed_phase(
             final_sin_psi,
@@ -1032,7 +1035,7 @@ def _load_pyqsp() -> tuple[Any, Any, Any, Any]:
 
 
 def _phase_block(angle: float, phase_qubit: str, block_ancillas: list[str]) -> list[str]:
-    angle_text = f"{angle:.12g}"
+    angle_text = f"{angle:.{QSP_QASM_ANGLE_PRECISION}g}"
     return [
         *_open_mcx_block(block_ancillas, phase_qubit),
         f"rz({angle_text}) {phase_qubit};",
@@ -1165,7 +1168,7 @@ def _controlled_signal_gate_name(
 def _format_qasm_gate(gate: QasmGate) -> str:
     if gate.parameter is None:
         return f"{gate.name} {_format_gate_operands(list(gate.qubits))};"
-    return f"{gate.name}({gate.parameter:.12g}) {_format_gate_operands(list(gate.qubits))};"
+    return f"{gate.name}({gate.parameter:.{QSP_QASM_ANGLE_PRECISION}g}) {_format_gate_operands(list(gate.qubits))};"
 
 
 def _base_signed_phase(
@@ -1270,9 +1273,9 @@ def _controlled_selector_qsp_execution(
     for idx, (phase, psi, theta) in enumerate(
         zip(record["pyqsp_phases"], record["qsvt_projector_phases"], record["qasm_rz_angles"])
     ):
-        lines.append(f"// {component} phi_{idx} = {phase:.12g}")
-        lines.append(f"// {component} psi_{idx} = {psi:.12g}")
-        lines.append(f"// {component} theta_rz_{idx} = {theta:.12g}")
+        lines.append(f"// {component} phi_{idx} = {phase:.{QSP_QASM_ANGLE_PRECISION}g}")
+        lines.append(f"// {component} psi_{idx} = {psi:.{QSP_QASM_ANGLE_PRECISION}g}")
+        lines.append(f"// {component} theta_rz_{idx} = {theta:.{QSP_QASM_ANGLE_PRECISION}g}")
         lines.extend(
             _controlled_selector_phase_block(
                 theta,
@@ -1396,8 +1399,8 @@ def _controlled_select_rz(
 
 
 def _multi_controlled_rz(angle: float, *, open_controls: list[str], solid_controls: list[str], target: str) -> list[str]:
-    half_text = f"{angle / 2.0:.12g}"
-    neg_half_text = f"{-angle / 2.0:.12g}"
+    half_text = f"{angle / 2.0:.{QSP_QASM_ANGLE_PRECISION}g}"
+    neg_half_text = f"{-angle / 2.0:.{QSP_QASM_ANGLE_PRECISION}g}"
     return [
         *_open_mcx_controls(open_controls, solid_controls, target),
         f"rz({neg_half_text}) {target};",
@@ -1408,8 +1411,8 @@ def _multi_controlled_rz(angle: float, *, open_controls: list[str], solid_contro
 
 def _select_rz(angle: float, selector_qubit: str, phase_qubit: str) -> list[str]:
     half = angle / 2.0
-    half_text = f"{half:.12g}"
-    neg_half_text = f"{-half:.12g}"
+    half_text = f"{half:.{QSP_QASM_ANGLE_PRECISION}g}"
+    neg_half_text = f"{-half:.{QSP_QASM_ANGLE_PRECISION}g}"
     return [
         f"x {selector_qubit};",
         f"rz({half_text}) {phase_qubit};",

@@ -47,7 +47,8 @@ evaluation/results/block_encoding_results.csv
 The RQ1 CSV includes `check_mode`, `check_epsilon`, `inferred_alpha`,
 `residual_norm`, `residual_threshold`, `residual_numerical_tolerance`, and
 `residual_acceptance_threshold` so paper-mode results record the final
-proportionality check data explicitly.
+proportionality check data explicitly. `residual_norm` is the rigorous Arb upper
+bound used for acceptance, not a coefficient midpoint.
 
 The default sizes are the consecutive integers `n = 2..128`.
 All three families use the same `ry`-based uniform PREP generator, including
@@ -84,7 +85,11 @@ The approximation grid uses
 evaluates the Chebyshev roots `x_m = cos((2m - 1)*pi/(2M))` for `m = 1..M`.
 The approximation check computes `beta = <B,e> / ||B||^2` on those grid values
 and reports the error for `beta*B(x) - exp(-i*x*t)`. The `approx_beta` CSV
-field records the fitted scale.
+field records the fitted scale. QSP angles, coefficient propagation, fitted
+scale, and grid evaluation use Arb/Acb balls with at least 60 decimal digits
+(large block encodings automatically use two digits per system qubit); the reported
+maximum error is a rigorous upper bound. Generated physical QSP rotations
+retain all 17 meaningful binary64 digits supplied by pyqsp.
 
 To compare the generated all-zero branch against the exact polynomial in the
 manifest instead, use:
@@ -118,9 +123,11 @@ The result CSV is written to:
 evaluation/results/hamsim_results.csv
 ```
 
-The generated RQ2 suite uses `t = 0.1, 0.5, 1.0, 2.0, 4.0`,
-`epsilon = 1e-1, 1e-4, 1e-6, 1e-10, 1e-12`, and `m = 1`.
-For `t = 0.5`, the epsilon axis gives full QSP degrees `3, 5, 7, 9, 11`.
+The generated RQ2 `vary_t` suite uses selected simulation times from `0.1`
+through `50.0`, producing every odd full QSP degree from `3` through `77` at fixed
+`epsilon = 1e-4`. The `vary_epsilon` suite sweeps every decade from `1e-1`
+through `1e-12` at fixed `t = 0.5`. Both axes use `m = 1`. The generator also
+accepts custom comma-separated `--t-values` and `--epsilons` lists.
 The degree columns record the generated polynomial degree; on the `vary_t`
 axis, epsilon and `m` stay fixed even though the polynomial degree changes with
 the requested simulation time.

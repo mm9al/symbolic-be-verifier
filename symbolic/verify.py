@@ -1,20 +1,24 @@
 from __future__ import annotations
 
 import argparse
-import cmath
 import csv
 from dataclasses import dataclass
+from functools import wraps
 import io
 import math
 from pathlib import Path
 import re
 import time
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import sympy as sp
 
 from .branch_state import BranchState, Gate
 from .expr import OpExpr, parse_operator_expression
+from .interval import acb, arb, ctx, format_ball, is_ball, is_exact_zero, to_acb, to_arb
+from .interval import divide as scalar_divide
+from .interval import multiply as scalar_multiply
+from .interval import subtract as scalar_subtract
 from . import profile
 from .qasm_parser import parse_qasm_file
 from .scalar import scalar_simplify
@@ -29,7 +33,20 @@ FAIL_GARBAGE = "FAIL_GARBAGE"
 DEFAULT_TOLERANCE = 1e-8
 DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE = 1e-12
 DEFAULT_BLOCK_ENCODING_CHECK_PRECISION = 60
+DEFAULT_QSP_CALCULATION_PRECISION = 60
+BALL_PRECISION_DIGITS_PER_SYSTEM_QUBIT = 2
 DEFAULT_MAX_APPROXIMATION_GRID_POINTS = 10_000_000
+
+
+@dataclass(frozen=True)
+class BallPolynomial:
+    """A polynomial whose coefficients are rigorous complex balls."""
+
+    terms: Mapping[int, acb]
+
+    @property
+    def degree(self) -> int:
+        return max(self.terms, default=0)
 
 
 @dataclass(frozen=True)
@@ -64,10 +81,13 @@ class ApproximationCheck:
     num_grid_points: int
     max_grid_error: float
     worst_x: float
+    epsilon_ball: arb
+    beta_ball: acb
+    max_grid_error_upper: arb
 
     @property
     def success(self) -> bool:
-        return self.max_grid_error <= self.epsilon / 2
+        return bool(self.max_grid_error_upper <= (self.epsilon_ball / 2).lower())
 
     @property
     def polynomial_lipschitz(self) -> float:
@@ -97,10 +117,16 @@ class BlockEncodingProportionalityCheck:
     acceptance_threshold: float
     coefficient_norm: float
     target_norm: float
+    alpha_ball: arb
+    residual_norm_upper: arb
+    acceptance_threshold_ball: arb
 
     @property
     def success(self) -> bool:
-        return bool(self.alpha > 0 and self.residual_norm <= self.acceptance_threshold)
+        return bool(
+            self.alpha_ball.lower() > 0
+            and self.residual_norm_upper <= self.acceptance_threshold_ball.lower()
+        )
 
 
 @dataclass(frozen=True)
@@ -112,8 +138,8 @@ class VerificationResult:
     ancilla_qubits: Tuple[int, ...] = (0,)
     system_qubits: Tuple[int, ...] = (1,)
     qsp_normalized: Optional[WordExpr] = None
-    qsp_polynomial: Optional[sp.Expr] = None
-    qsp_expected_polynomial: Optional[sp.Expr] = None
+    qsp_polynomial: Optional[sp.Expr | BallPolynomial] = None
+    qsp_expected_polynomial: Optional[sp.Expr | BallPolynomial] = None
     qsp_actual: Optional[OpExpr] = None
     qsp_expected: Optional[OpExpr] = None
     qsp_approximation: Optional[ApproximationCheck] = None
@@ -178,6 +204,20 @@ class VerificationResult:
         )
 
 
+def _with_ball_precision(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        requested = kwargs.get("qsp_calculation_precision", DEFAULT_QSP_CALCULATION_PRECISION)
+        systems = kwargs.get("systems")
+        num_system_qubits = len(systems) if systems is not None else 1
+        precision = max(requested, BALL_PRECISION_DIGITS_PER_SYSTEM_QUBIT * num_system_qubits)
+        kwargs["qsp_calculation_precision"] = precision
+        with ctx.workdps(precision):
+            return function(*args, **kwargs)
+
+    return wrapped
+
+
 def run_circuit(
     gates: Iterable[Gate],
     *,
@@ -188,6 +228,7 @@ def run_circuit(
     keep_trace: bool = False,
     profile_gates: bool = False,
     expression_kind: Optional[str] = None,
+    rewrite_after_each_step: bool = True,
 ) -> VerificationResult:
     gates = list(gates)
     ancilla_qubits = _normalize_ancillas(ancilla=ancilla, ancillas=ancillas)
@@ -209,6 +250,12 @@ def run_circuit(
         started = time.perf_counter()
         try:
             state = state.apply(gate, ancillas=ancilla_qubits, systems=system_qubits)
+            if (
+                rewrite_after_each_step
+                and expression_kind == "word"
+                and _is_qsp_word_gate(gate.name)
+            ):
+                state = _rewrite_word_branches(state)
         finally:
             if profile_gates:
                 profile.clear_current()
@@ -240,6 +287,7 @@ def run_circuit(
     )
 
 
+@_with_ball_precision
 def verify_qasm_file(
     path: str | Path,
     *,
@@ -250,6 +298,8 @@ def verify_qasm_file(
     systems: Optional[Sequence[int]] = None,
     keep_trace: bool = False,
     profile_gates: bool = False,
+    rewrite_after_each_step: bool = True,
+    qsp_calculation_precision: int = DEFAULT_QSP_CALCULATION_PRECISION,
     base: str | OpExpr | None = None,
     expected_polynomial: str | sp.Expr | None = None,
     extract_qsp_polynomial: bool = False,
@@ -263,6 +313,8 @@ def verify_qasm_file(
     block_encoding_residual_tolerance: float = DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE,
     tolerance: float = DEFAULT_TOLERANCE,
 ) -> VerificationResult:
+    if qsp_calculation_precision < 1:
+        raise ValueError("qsp_calculation_precision must be positive")
     if (target_exp_tau is None) != (target_exp_epsilon is None):
         raise ValueError("--hamsim-tau and --hamsim-epsilon must be set together")
     if target_exp_epsilon is not None and target_exp_epsilon <= 0:
@@ -284,7 +336,10 @@ def verify_qasm_file(
     if selected_modes > 1:
         raise ValueError("Choose exactly one verification route: --expected, --expected-polynomial, or --hamsim-*")
 
-    gates = parse_qasm_file(path)
+    # Decimal QASM parameters enter the verifier as Arb intervals.  This keeps
+    # their source-text meaning and rounding enclosure through every gate,
+    # including non-QSP block-encoding circuits.
+    gates = parse_qasm_file(path, numeric_precision=qsp_calculation_precision)
     ancilla_qubits = _normalize_ancillas(ancilla=ancilla, ancillas=ancillas)
     system_qubits = _normalize_systems(system=system, systems=systems)
     expected_expr = _normalize_expected(expected, num_system_qubits=len(system_qubits))
@@ -304,6 +359,7 @@ def verify_qasm_file(
         keep_trace=keep_trace,
         profile_gates=profile_gates,
         expression_kind=expression_kind,
+        rewrite_after_each_step=rewrite_after_each_step,
     )
     qsp_normalized = None
     qsp_polynomial = None
@@ -348,6 +404,7 @@ def verify_qasm_file(
             qsp_polynomial,
             tau=target_exp_tau,
             epsilon=target_exp_epsilon,
+            precision=qsp_calculation_precision,
             max_grid_points=max_approx_grid_points,
         )
         check_statuses.append(PASS if qsp_approximation.success else FAIL)
@@ -410,10 +467,14 @@ def format_result(result: VerificationResult, *, show_trace: bool = False) -> st
             if check is not None:
                 lines.append(f"alpha = {check.alpha:.12g}")
                 lines.append(f"Projection length = {check.projection_length:.12g}")
-                lines.append(f"Coefficient residual norm = {check.residual_norm:.12g}")
+                lines.append(f"Coefficient residual upper bound = {check.residual_norm:.12g}")
                 lines.append(f"Coefficient residual threshold = {check.threshold:.12g}")
                 lines.append(f"Coefficient residual numerical tolerance = {check.numerical_tolerance:.12g}")
                 lines.append(f"Coefficient residual acceptance threshold = {check.acceptance_threshold:.12g}")
+                lines.append(
+                    "Coefficient residual acceptance threshold ball = "
+                    f"{format_ball(check.acceptance_threshold_ball, 12)}"
+                )
         else:
             diff = result.final_state.top_left() - result.expected
             lines.append(FAIL)
@@ -421,10 +482,14 @@ def format_result(result: VerificationResult, *, show_trace: bool = False) -> st
             if check is not None:
                 lines.append(f"alpha = {check.alpha:.12g}")
                 lines.append(f"Projection length = {check.projection_length:.12g}")
-                lines.append(f"Coefficient residual norm = {check.residual_norm:.12g}")
+                lines.append(f"Coefficient residual upper bound = {check.residual_norm:.12g}")
                 lines.append(f"Coefficient residual threshold = {check.threshold:.12g}")
                 lines.append(f"Coefficient residual numerical tolerance = {check.numerical_tolerance:.12g}")
                 lines.append(f"Coefficient residual acceptance threshold = {check.acceptance_threshold:.12g}")
+                lines.append(
+                    "Coefficient residual acceptance threshold ball = "
+                    f"{format_ball(check.acceptance_threshold_ball, 12)}"
+                )
             diff_label = "B0" if result.final_state.num_ancillas == 1 else f"B[{_format_key((0,) * result.final_state.num_ancillas)}]"
             lines.append(f"{diff_label} - expected = {diff}")
 
@@ -450,12 +515,16 @@ def format_result(result: VerificationResult, *, show_trace: bool = False) -> st
                 target_label = f"{_format_scalar(check.scale)} * exp(-i*x*{check.tau:.12g})"
             lines.append(f"Approximation target = {target_label}")
             lines.append(f"Approximation beta = {_format_complex(check.beta)}")
+            lines.append(f"Approximation beta ball = {format_ball(check.beta_ball, 12)}")
             lines.append(f"Approximation epsilon = {check.epsilon:.12g}")
             lines.append(f"Approximation polynomial degree = {check.polynomial_degree}")
             lines.append(f"Approximation Chebyshev degree D = {check.approximation_degree}")
             lines.append(f"Approximation grid angular spacing = {check.angular_spacing:.12g}")
             lines.append(f"Approximation grid roots = {check.num_grid_points}")
-            lines.append(f"Approximation max grid error = {check.max_grid_error:.12g} at x = {check.worst_x:.12g}")
+            lines.append(
+                f"Approximation max grid error upper bound = {check.max_grid_error:.12g} "
+                f"at x = {check.worst_x:.12g}"
+            )
         if result.qsp_status is not None:
             lines.append(result.qsp_status)
 
@@ -521,6 +590,19 @@ def _branch_term_count(branch: OpExpr | WordExpr) -> int:
     return len(branch.terms)
 
 
+def _rewrite_word_branches(state: BranchState) -> BranchState:
+    """Normalize every live QSP word branch after a signal-oracle step."""
+    return BranchState(
+        state.num_ancillas,
+        state.num_system_qubits,
+        {
+            key: eliminate(branch) if isinstance(branch, WordExpr) else branch
+            for key, branch in state.branches.items()
+        },
+        expression_kind=state.expression_kind,
+    )
+
+
 def _normalize_expected(expected: str | OpExpr | None, *, num_system_qubits: int) -> Optional[OpExpr]:
     if expected is None:
         return None
@@ -541,12 +623,16 @@ def _is_qsp_word_gate(name: str) -> bool:
 
 
 def scalar_close(a: sp.Expr, b: sp.Expr, *, tol: float = DEFAULT_TOLERANCE) -> bool:
-    diff = scalar_simplify(sp.sympify(a) - sp.sympify(b))
-    if diff == 0:
+    try:
+        diff = scalar_simplify(scalar_subtract(a, b))
+    except Exception:
+        return False
+    if is_exact_zero(diff):
         return True
 
     try:
-        return abs(complex(sp.N(diff, 50))) <= tol
+        with ctx.workdps(DEFAULT_BLOCK_ENCODING_CHECK_PRECISION):
+            return bool(to_acb(diff).abs_upper() <= to_arb(tol).lower())
     except Exception:
         return False
 
@@ -557,29 +643,36 @@ def pauli_expr_close(actual: OpExpr, expected: OpExpr, *, tol: float = DEFAULT_T
     return all(scalar_close(coeff, 0, tol=tol) for coeff in diff.terms.values())
 
 
-def polynomial_close(actual: sp.Expr, expected: sp.Expr, *, tol: float = DEFAULT_TOLERANCE) -> bool:
-    x = sp.Symbol("x")
-    diff = sp.expand(parse_polynomial(actual) - parse_polynomial(expected))
-    if diff == 0:
-        return True
-    poly = sp.Poly(diff, x)
-    return all(scalar_close(coeff, 0, tol=tol) for _, coeff in poly.terms())
+def polynomial_close(
+    actual: sp.Expr | BallPolynomial,
+    expected: sp.Expr | BallPolynomial,
+    *,
+    tol: float = DEFAULT_TOLERANCE,
+) -> bool:
+    actual_terms = _polynomial_terms(actual)
+    expected_terms = _polynomial_terms(expected)
+    return all(
+        scalar_close(actual_terms.get(degree, 0), expected_terms.get(degree, 0), tol=tol)
+        for degree in set(actual_terms) | set(expected_terms)
+    )
 
 
 def verify_polynomial_approximates_exp(
-    polynomial: str | sp.Expr,
+    polynomial: str | sp.Expr | BallPolynomial,
     *,
     tau: float,
     epsilon: float,
     scale: str | sp.Expr = 1,
+    precision: int = DEFAULT_QSP_CALCULATION_PRECISION,
     max_grid_points: int | None = DEFAULT_MAX_APPROXIMATION_GRID_POINTS,
 ) -> ApproximationCheck:
     if epsilon <= 0:
         raise ValueError("epsilon must be positive")
+    if precision < 1:
+        raise ValueError("precision must be positive")
     parsed = parse_polynomial(polynomial)
     scale_expr = parse_scalar_expression(scale)
-    scale_value = complex(sp.N(scale_expr, 50))
-    coeffs = _complex_polynomial_coefficients(parsed)
+    coeffs = _acb_polynomial_coefficients(parsed, precision=precision)
     polynomial_degree = len(coeffs) - 1
     approximation_degree = hamsim_chebyshev_approximation_degree(tau=tau, epsilon=epsilon)
     num_grid_points = hamsim_approximation_grid_size(
@@ -597,27 +690,39 @@ def verify_polynomial_approximates_exp(
                 f"(D={approximation_degree}, degree={polynomial_degree}, tau={tau:.12g}, epsilon={epsilon:.12g}); "
                 f"max_grid_points is {max_grid_points}"
             )
-    angular_spacing = math.pi / num_grid_points
+    with ctx.workdps(precision):
+        pi = arb.pi()
+        angular_spacing_ball = pi / num_grid_points
+        tau_ball = to_arb(tau)
+        epsilon_ball = to_arb(epsilon)
+        scale_value = to_acb(scale_expr)
+        grid_values: list[tuple[arb, acb, acb]] = []
+        inner_product = acb(0)
+        polynomial_norm_sq = arb(0)
+        for index in range(1, num_grid_points + 1):
+            point = ((2 * index - 1) * pi / (2 * num_grid_points)).cos()
+            actual = _eval_acb_polynomial(coeffs, point)
+            expected = scale_value * (-acb(0, 1) * point * tau_ball).exp()
+            grid_values.append((point, actual, expected))
+            inner_product += actual.conjugate() * expected
+            polynomial_norm_sq += _abs_square_ball(actual)
+        if polynomial_norm_sq.contains(0):
+            beta_ball = acb(0)
+        else:
+            beta_ball = inner_product / polynomial_norm_sq
 
-    grid_values: list[tuple[float, complex, complex]] = []
-    inner_product = 0j
-    polynomial_norm_sq = 0.0
-    for index in range(1, num_grid_points + 1):
-        point = math.cos((2 * index - 1) * math.pi / (2 * num_grid_points))
-        actual = _eval_complex_polynomial(coeffs, point)
-        expected = scale_value * cmath.exp(-1j * point * tau)
-        grid_values.append((point, actual, expected))
-        inner_product += actual.conjugate() * expected
-        polynomial_norm_sq += abs(actual) ** 2
-    beta = 0j if polynomial_norm_sq == 0 else inner_product / polynomial_norm_sq
+        max_error_upper = arb(0)
+        worst_x_ball = arb(-1)
+        for point, actual, expected in grid_values:
+            error_upper = (beta_ball * actual - expected).abs_upper()
+            if error_upper > max_error_upper:
+                max_error_upper = error_upper
+                worst_x_ball = point
 
-    max_error = -1.0
-    worst_x = -1.0
-    for point, actual, expected in grid_values:
-        error = abs(beta * actual - expected)
-        if error > max_error:
-            max_error = error
-            worst_x = point
+        angular_spacing = float(angular_spacing_ball.mid())
+        beta = complex(float(beta_ball.real.mid()), float(beta_ball.imag.mid()))
+        max_error = _arb_upper_float(max_error_upper)
+        worst_x = float(worst_x_ball.mid())
 
     return ApproximationCheck(
         tau=tau,
@@ -630,13 +735,23 @@ def verify_polynomial_approximates_exp(
         num_grid_points=num_grid_points,
         max_grid_error=max_error,
         worst_x=worst_x,
+        epsilon_ball=epsilon_ball,
+        beta_ball=beta_ball,
+        max_grid_error_upper=max_error_upper,
     )
 
 
 def hamsim_chebyshev_approximation_degree(*, tau: float, epsilon: float) -> int:
     if epsilon <= 0:
         raise ValueError("epsilon must be positive")
-    return max(0, math.ceil(math.e * abs(tau) / 2 + math.log(32 / epsilon)))
+    with ctx.workdps(DEFAULT_QSP_CALCULATION_PRECISION):
+        tau_ball = to_arb(tau)
+        epsilon_ball = to_arb(epsilon)
+        bound = arb(1).exp() * abs(tau_ball) / 2 + (arb(32) / epsilon_ball).log()
+        degree = bound.upper().ceil().unique_fmpz()
+        if degree is None:
+            raise ValueError("Could not certify the Hamiltonian-simulation approximation degree")
+        return max(0, int(degree))
 
 
 def hamsim_approximation_grid_size(*, tau: float, epsilon: float, polynomial_degree: int) -> int:
@@ -653,7 +768,16 @@ def normalize_qsp_expression(expr: WordExpr, *, hermitian_base: bool = False) ->
     return normalized
 
 
-def convert_h_word_to_polynomial(expr: WordExpr) -> sp.Expr:
+def convert_h_word_to_polynomial(expr: WordExpr) -> sp.Expr | BallPolynomial:
+    if any(is_ball(coeff) for coeff in expr.terms.values()):
+        terms: dict[int, acb] = {}
+        for word, coeff in expr.terms.items():
+            if any(atom != "H" for atom in word):
+                raise ValueError(f"Cannot convert non-H word to polynomial: {word!r}")
+            degree = len(word)
+            terms[degree] = terms.get(degree, acb(0)) + to_acb(coeff)
+        return BallPolynomial({degree: coeff for degree, coeff in terms.items() if not coeff.is_zero()})
+
     x = sp.Symbol("x")
     polynomial = sp.Integer(0)
     for word, coeff in expr.terms.items():
@@ -667,11 +791,17 @@ def is_h_polynomial_word(expr: WordExpr) -> bool:
     return not expr.has_any_atom(GARBAGE_ATOMS | {"Hd"})
 
 
-def parse_polynomial(polynomial: str | sp.Expr) -> sp.Expr:
+def parse_polynomial(polynomial: str | sp.Expr | BallPolynomial) -> sp.Expr | BallPolynomial:
+    if isinstance(polynomial, BallPolynomial):
+        return polynomial
     x = sp.Symbol("x")
     if isinstance(polynomial, str):
         text = polynomial.replace("^", "**")
-        parsed = sp.sympify(text, locals={"x": x, "pi": sp.pi, "I": sp.I, "i": sp.I})
+        parsed = sp.sympify(
+            text,
+            locals={"x": x, "pi": sp.pi, "I": sp.I, "i": sp.I},
+            rational=True,
+        )
     else:
         parsed = sp.sympify(polynomial)
     return sp.expand(parsed)
@@ -679,26 +809,35 @@ def parse_polynomial(polynomial: str | sp.Expr) -> sp.Expr:
 
 def parse_scalar_expression(value: str | sp.Expr) -> sp.Expr:
     if isinstance(value, str):
-        return sp.sympify(value.replace("^", "**"), locals={"pi": sp.pi, "I": sp.I, "i": sp.I})
+        return sp.sympify(
+            value.replace("^", "**"),
+            locals={"pi": sp.pi, "I": sp.I, "i": sp.I},
+            rational=True,
+        )
     return sp.sympify(value)
 
 
-def rescale_polynomial_for_target(polynomial: str | sp.Expr, scale: str | sp.Expr) -> sp.Expr:
+def rescale_polynomial_for_target(
+    polynomial: str | sp.Expr | BallPolynomial,
+    scale: str | sp.Expr,
+) -> sp.Expr | BallPolynomial:
     scale_expr = parse_scalar_expression(scale)
-    scale_value = abs(complex(sp.N(scale_expr, 50)))
-    if scale_value == 0:
+    scale_ball = to_acb(scale_expr)
+    if scale_ball.abs_lower() <= 0:
         raise ValueError("target_exp_scale must be nonzero for rescaled approximation checking")
-    return sp.expand(parse_polynomial(polynomial) / scale_expr)
-
-
-def eval_polynomial_on_pauliop(polynomial: str | sp.Expr, base: OpExpr) -> OpExpr:
-    x = sp.Symbol("x")
     parsed = parse_polynomial(polynomial)
-    poly = sp.Poly(parsed, x)
+    if isinstance(parsed, BallPolynomial):
+        return BallPolynomial({degree: coeff / scale_ball for degree, coeff in parsed.terms.items()})
+    return sp.expand(parsed / scale_expr)
+
+
+def eval_polynomial_on_pauliop(polynomial: str | sp.Expr | BallPolynomial, base: OpExpr) -> OpExpr:
+    parsed = parse_polynomial(polynomial)
+    terms = _polynomial_terms(parsed)
     powers = {0: OpExpr.identity(base.num_qubits)}
     result = OpExpr.zero(base.num_qubits)
 
-    for (degree,), coeff in poly.terms():
+    for degree, coeff in sorted(terms.items(), reverse=True):
         if degree not in powers:
             current = powers[max(powers)]
             for exponent in range(max(powers) + 1, degree + 1):
@@ -708,87 +847,47 @@ def eval_polynomial_on_pauliop(polynomial: str | sp.Expr, base: OpExpr) -> OpExp
     return result
 
 
-def _complex_polynomial_coefficients(polynomial: str | sp.Expr) -> list[complex]:
+def _polynomial_terms(polynomial: str | sp.Expr | BallPolynomial) -> dict[int, Any]:
+    parsed = parse_polynomial(polynomial)
+    if isinstance(parsed, BallPolynomial):
+        return dict(parsed.terms)
     x = sp.Symbol("x")
-    poly = sp.Poly(parse_polynomial(polynomial), x)
+    poly = sp.Poly(parsed, x)
     if poly.is_zero:
-        return [0j]
-    coeffs = [0j] * (poly.degree() + 1)
-    for (degree,), coeff in poly.terms():
-        coeffs[degree] = complex(sp.N(coeff, 50))
-    return coeffs
+        return {}
+    return {degree: coeff for (degree,), coeff in poly.terms()}
 
 
-def _differentiate_coefficients(coeffs: Sequence[complex]) -> list[complex]:
-    if len(coeffs) <= 1:
-        return [0j]
-    return [degree * coeffs[degree] for degree in range(1, len(coeffs))]
+def _acb_polynomial_coefficients(
+    polynomial: str | sp.Expr | BallPolynomial,
+    *,
+    precision: int,
+) -> list[acb]:
+    with ctx.workdps(precision):
+        terms = _polynomial_terms(polynomial)
+        if not terms:
+            return [acb(0)]
+        coeffs = [acb(0) for _ in range(max(terms) + 1)]
+        for degree, coeff in terms.items():
+            coeffs[degree] = to_acb(coeff)
+        return coeffs
 
 
-def _max_abs_polynomial_on_interval(coeffs: Sequence[complex]) -> float:
-    if not coeffs or all(abs(coeff) == 0 for coeff in coeffs):
-        return 0.0
-
-    candidates = {-1.0, 1.0}
-    stationary_coeffs = _differentiate_abs_square_coefficients(coeffs)
-    if any(abs(coeff) > 0 for coeff in stationary_coeffs):
-        roots = _real_roots_in_unit_interval(stationary_coeffs)
-        candidates.update(roots or _sample_max_candidates(coeffs))
-    else:
-        candidates.add(0.0)
-
-    return max(abs(_eval_complex_polynomial(coeffs, point)) for point in candidates)
-
-
-def _differentiate_abs_square_coefficients(coeffs: Sequence[complex]) -> list[complex]:
-    abs_square = [0j] * (2 * len(coeffs) - 1)
-    for left_degree, left_coeff in enumerate(coeffs):
-        for right_degree, right_coeff in enumerate(coeffs):
-            abs_square[left_degree + right_degree] += left_coeff * right_coeff.conjugate()
-    if len(abs_square) <= 1:
-        return [0j]
-    return [degree * abs_square[degree] for degree in range(1, len(abs_square))]
-
-
-def _real_roots_in_unit_interval(coeffs: Sequence[complex]) -> list[float]:
-    x = sp.Symbol("x")
-    expr = sp.Integer(0)
-    for degree, coeff in enumerate(coeffs):
-        if abs(coeff) > 0:
-            expr += sp.Float(coeff.real, 50) * x**degree
-    if expr == 0:
-        return []
-
-    try:
-        roots = sp.nroots(sp.Poly(expr, x), n=30, maxsteps=200)
-    except Exception:
-        return []
-
-    points: list[float] = []
-    for root in roots:
-        value = complex(root)
-        if abs(value.imag) <= 1e-10 and -1.0 <= value.real <= 1.0:
-            points.append(float(value.real))
-    return points
-
-
-def _sample_max_candidates(coeffs: Sequence[complex]) -> list[float]:
-    sample_count = 4096
-    best_index = max(
-        range(sample_count + 1),
-        key=lambda index: abs(_eval_complex_polynomial(coeffs, -1.0 + 2.0 * index / sample_count)),
-    )
-    return [-1.0 + 2.0 * best_index / sample_count]
-
-
-def _eval_complex_polynomial(coeffs: Sequence[complex], point: float) -> complex:
-    value = 0j
+def _eval_acb_polynomial(coeffs: Sequence[acb], point: arb) -> acb:
+    value = acb(0)
     for coeff in reversed(coeffs):
         value = value * point + coeff
     return value
 
 
-def _format_polynomial(polynomial: sp.Expr) -> str:
+def _format_polynomial(polynomial: sp.Expr | BallPolynomial) -> str:
+    if isinstance(polynomial, BallPolynomial):
+        pieces = []
+        for degree in sorted(polynomial.terms, reverse=True):
+            coeff = format_ball(polynomial.terms[degree])
+            monomial = "" if degree == 0 else ("*x" if degree == 1 else f"*x^{degree}")
+            pieces.append(f"({coeff}){monomial}")
+        return " + ".join(pieces) if pieces else "0"
     return sp.sstr(scalar_simplify(polynomial)).replace("**", "^")
 
 
@@ -825,12 +924,14 @@ def proportional_scale(actual: OpExpr, expected: OpExpr, *, tol: float = DEFAULT
         return False, None
 
     p0 = next(iter(expected_terms))
-    scale = scalar_simplify(actual_terms.get(p0, sp.Integer(0)) / expected_terms[p0])
+    scale = scalar_simplify(
+        scalar_divide(actual_terms.get(p0, sp.Integer(0)), expected_terms[p0])
+    )
 
     for pauli_string in set(actual_terms) | set(expected_terms):
         actual_coeff = actual_terms.get(pauli_string, sp.Integer(0))
         expected_coeff = expected_terms.get(pauli_string, sp.Integer(0))
-        if not scalar_close(actual_coeff, scale * expected_coeff, tol=tol):
+        if not scalar_close(actual_coeff, scalar_multiply(scale, expected_coeff), tol=tol):
             return False, None
 
     return True, scale
@@ -848,105 +949,141 @@ def block_encoding_proportionality_check(
     if residual_tolerance < 0:
         raise ValueError("residual_tolerance must be nonnegative")
 
-    precision = DEFAULT_BLOCK_ENCODING_CHECK_PRECISION
+    with ctx.workdps(DEFAULT_BLOCK_ENCODING_CHECK_PRECISION):
+        return _block_encoding_proportionality_check_balls(
+            actual,
+            target,
+            epsilon=epsilon,
+            residual_tolerance=residual_tolerance,
+        )
+
+
+def _block_encoding_proportionality_check_balls(
+    actual: OpExpr,
+    target: OpExpr,
+    *,
+    epsilon: float,
+    residual_tolerance: float,
+) -> BlockEncodingProportionalityCheck:
     actual, target = _align_operator_qubits(actual, target)
     actual_terms = _nonzero_terms(actual)
     target_terms = _nonzero_terms(target)
     pauli_strings = set(actual_terms) | set(target_terms)
-    threshold = sp.N(sp.Float(str(epsilon), precision) / sp.sqrt(sp.Integer(2) ** actual.num_qubits), precision)
-    residual_tolerance_value = sp.Float(str(residual_tolerance), precision)
-    acceptance_threshold = max(threshold, residual_tolerance_value)
+    threshold_ball = to_arb(epsilon) / arb(2**actual.num_qubits).sqrt()
+    residual_tolerance_ball = to_arb(residual_tolerance)
+    acceptance_threshold_ball = threshold_ball.max(residual_tolerance_ball)
     if not pauli_strings:
-        return BlockEncodingProportionalityCheck(
+        return _make_block_encoding_check(
             epsilon=epsilon,
-            alpha=0.0,
-            projection_length=0.0,
-            residual_norm=math.inf,
-            threshold=threshold,
-            numerical_tolerance=residual_tolerance,
-            acceptance_threshold=acceptance_threshold,
-            coefficient_norm=0.0,
-            target_norm=0.0,
+            alpha_ball=arb(0),
+            projection_length_ball=arb(0),
+            residual_norm_upper=arb.pos_inf(),
+            threshold_ball=threshold_ball,
+            residual_tolerance_ball=residual_tolerance_ball,
+            acceptance_threshold_ball=acceptance_threshold_ball,
+            coefficient_norm_ball=arb(0),
+            target_norm_ball=arb(0),
         )
 
-    actual_coeffs: dict[tuple[str, ...], sp.Expr] = {}
-    target_coeffs: dict[tuple[str, ...], sp.Expr] = {}
+    actual_coeffs: dict[tuple[str, ...], acb] = {}
+    target_coeffs: dict[tuple[str, ...], acb] = {}
     for pauli_string in pauli_strings:
-        actual_coeffs[pauli_string] = _coefficient_as_numeric(
-            actual_terms.get(pauli_string, sp.Integer(0)),
-            precision=precision,
-        )
-        target_coeffs[pauli_string] = _coefficient_as_numeric(
-            target_terms.get(pauli_string, sp.Integer(0)),
-            precision=precision,
-        )
+        actual_coeffs[pauli_string] = to_acb(actual_terms.get(pauli_string, 0))
+        target_coeffs[pauli_string] = to_acb(target_terms.get(pauli_string, 0))
 
-    actual_norm_sq = _numeric_check_value(
-        sum(_abs_square(coeff, precision=precision) for coeff in actual_coeffs.values()),
-        precision=precision,
-    )
-    target_norm_sq = _numeric_check_value(
-        sum(_abs_square(coeff, precision=precision) for coeff in target_coeffs.values()),
-        precision=precision,
-    )
-    if actual_norm_sq == 0 or target_norm_sq == 0:
-        return BlockEncodingProportionalityCheck(
+    actual_norm_sq = sum((_abs_square_ball(coeff) for coeff in actual_coeffs.values()), arb(0))
+    target_norm_sq = sum((_abs_square_ball(coeff) for coeff in target_coeffs.values()), arb(0))
+    if actual_norm_sq.contains(0) or target_norm_sq.contains(0):
+        return _make_block_encoding_check(
             epsilon=epsilon,
-            alpha=0.0,
-            projection_length=0.0,
-            residual_norm=math.inf,
-            threshold=threshold,
-            numerical_tolerance=residual_tolerance,
-            acceptance_threshold=acceptance_threshold,
-            coefficient_norm=_numeric_check_value(sp.sqrt(actual_norm_sq), precision=precision),
-            target_norm=_numeric_check_value(sp.sqrt(target_norm_sq), precision=precision),
+            alpha_ball=arb(0),
+            projection_length_ball=arb(0),
+            residual_norm_upper=arb.pos_inf(),
+            threshold_ball=threshold_ball,
+            residual_tolerance_ball=residual_tolerance_ball,
+            acceptance_threshold_ball=acceptance_threshold_ball,
+            coefficient_norm_ball=actual_norm_sq.sqrt(),
+            target_norm_ball=target_norm_sq.sqrt(),
         )
 
-    inner = _numeric_check_value(
-        sum(sp.conjugate(actual_coeffs[key]) * target_coeffs[key] for key in pauli_strings),
-        precision=precision,
+    inner = sum(
+        (actual_coeffs[key].conjugate() * target_coeffs[key] for key in pauli_strings),
+        acb(0),
     )
-    actual_norm = _numeric_check_value(sp.sqrt(actual_norm_sq), precision=precision)
-    projection_length = _numeric_check_value(sp.re(inner) / actual_norm, precision=precision)
-    alpha = _numeric_check_value(projection_length / actual_norm, precision=precision)
-    if alpha <= 0:
-        residual_norm = math.inf
+    actual_norm = actual_norm_sq.sqrt()
+    projection_length_ball = inner.real / actual_norm
+    alpha_ball = projection_length_ball / actual_norm
+    if alpha_ball.lower() <= 0:
+        residual_norm_upper = arb.pos_inf()
     else:
-        residual_norm = _numeric_check_value(
-            sp.sqrt(
-                sum(
-                    _abs_square(alpha * actual_coeffs[key] - target_coeffs[key], precision=precision)
-                    for key in pauli_strings
-                )
+        residual_norm_sq_upper = sum(
+            (
+                _square_upper(alpha_ball * actual_coeffs[key] - target_coeffs[key])
+                for key in pauli_strings
             ),
-            precision=precision,
+            arb(0),
         )
+        residual_norm_upper = residual_norm_sq_upper.sqrt().abs_upper()
 
+    return _make_block_encoding_check(
+        epsilon=epsilon,
+        alpha_ball=alpha_ball,
+        projection_length_ball=projection_length_ball,
+        residual_norm_upper=residual_norm_upper,
+        threshold_ball=threshold_ball,
+        residual_tolerance_ball=residual_tolerance_ball,
+        acceptance_threshold_ball=acceptance_threshold_ball,
+        coefficient_norm_ball=actual_norm,
+        target_norm_ball=target_norm_sq.sqrt(),
+    )
+
+
+def _abs_square_ball(value: acb) -> arb:
+    return (value.real * value.real + value.imag * value.imag).nonnegative_part()
+
+
+def _square_upper(value: acb) -> arb:
+    upper = value.abs_upper()
+    return upper * upper
+
+
+def _make_block_encoding_check(
+    *,
+    epsilon: float,
+    alpha_ball: arb,
+    projection_length_ball: arb,
+    residual_norm_upper: arb,
+    threshold_ball: arb,
+    residual_tolerance_ball: arb,
+    acceptance_threshold_ball: arb,
+    coefficient_norm_ball: arb,
+    target_norm_ball: arb,
+) -> BlockEncodingProportionalityCheck:
     return BlockEncodingProportionalityCheck(
         epsilon=epsilon,
-        alpha=alpha,
-        projection_length=projection_length,
-        residual_norm=residual_norm,
-        threshold=threshold,
-        numerical_tolerance=residual_tolerance,
-        acceptance_threshold=acceptance_threshold,
-        coefficient_norm=actual_norm,
-        target_norm=_numeric_check_value(sp.sqrt(target_norm_sq), precision=precision),
+        alpha=float(alpha_ball.mid()),
+        projection_length=float(projection_length_ball.mid()),
+        residual_norm=_arb_upper_float(residual_norm_upper),
+        threshold=float(threshold_ball.mid()),
+        numerical_tolerance=float(residual_tolerance_ball.mid()),
+        acceptance_threshold=float(acceptance_threshold_ball.mid()),
+        coefficient_norm=float(coefficient_norm_ball.mid()),
+        target_norm=float(target_norm_ball.mid()),
+        alpha_ball=alpha_ball,
+        residual_norm_upper=residual_norm_upper,
+        acceptance_threshold_ball=acceptance_threshold_ball,
     )
 
 
-def _coefficient_as_numeric(value: sp.Expr, *, precision: int) -> sp.Expr:
-    return sp.N(value, precision)
+def _arb_upper_float(value: arb) -> float:
+    """Convert an Arb upper bound to binary64 without rounding it downward."""
 
-
-def _abs_square(value: sp.Expr, *, precision: int) -> sp.Expr:
-    return sp.N(sp.re(sp.conjugate(value) * value), precision)
-
-
-def _numeric_check_value(value: sp.Expr, *, precision: int) -> sp.Expr:
-    if value == 0:
-        return sp.Float(0, precision)
-    return sp.N(value, precision)
+    if value.is_zero():
+        return 0.0
+    converted = float(value)
+    if not math.isfinite(converted):
+        return converted
+    return math.nextafter(converted, math.inf)
 
 
 def _align_operator_qubits(actual: OpExpr, expected: OpExpr) -> Tuple[OpExpr, OpExpr]:
@@ -955,12 +1092,18 @@ def _align_operator_qubits(actual: OpExpr, expected: OpExpr) -> Tuple[OpExpr, Op
 
 
 def _nonzero_terms(expr: OpExpr) -> dict:
-    return {pauli_string: coeff for pauli_string, coeff in expr.terms.items() if scalar_simplify(coeff) != 0}
+    return {
+        pauli_string: coeff
+        for pauli_string, coeff in expr.terms.items()
+        if not is_exact_zero(scalar_simplify(coeff))
+    }
 
 
 def _format_scalar(value: Optional[sp.Expr]) -> str:
     if value is None:
         return "None"
+    if is_ball(value):
+        return format_ball(value)
     return sp.sstr(scalar_simplify(value)).replace("I", "i")
 
 
@@ -1079,6 +1222,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="Compare QSP polynomials directly instead of evaluating them on --base.",
     )
     parser.add_argument("--tolerance", type=float, default=DEFAULT_TOLERANCE, help="Numeric tolerance for coefficient comparisons.")
+    parser.add_argument(
+        "--qsp-calculation-precision",
+        type=int,
+        default=DEFAULT_QSP_CALCULATION_PRECISION,
+        help=(
+            "Minimum decimal digits used to parse numeric angles, propagate ball coefficients, "
+            "and evaluate the approximation grid. Large block encodings automatically use at least "
+            f"{BALL_PRECISION_DIGITS_PER_SYSTEM_QUBIT} digits per system qubit. "
+            f"Default minimum: {DEFAULT_QSP_CALCULATION_PRECISION}."
+        ),
+    )
     parser.add_argument("--ancilla", default="0", help="Single ancilla qubit index. Ignored when --ancillas is set.")
     parser.add_argument("--ancillas", nargs="+", help='Ancilla qubits in branch-key order, e.g. q[0] q[1].')
     parser.add_argument("--system", default="1", help="Single system qubit index. Ignored when --systems is set.")
@@ -1087,6 +1241,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--result-only", action="store_true", help="Print only PASS/FAIL status.")
     parser.add_argument("--profile-gates", action="store_true", help="Collect per-gate branch/term/timing counters.")
     parser.add_argument("--profile-output", type=Path, help="Write --profile-gates CSV output to this path instead of stdout.")
+    parser.add_argument(
+        "--defer-qsp-rewrite",
+        action="store_true",
+        help="Disable eager word rewriting after QSP signal steps (useful for inspecting unreduced traces).",
+    )
     args = parser.parse_args(argv)
 
     ancillas = tuple(_parse_qubit_arg(value) for value in args.ancillas) if args.ancillas is not None else None
@@ -1113,6 +1272,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         block_encoding_residual_tolerance=args.block_encoding_residual_tolerance,
         tolerance=args.tolerance,
         profile_gates=args.profile_gates,
+        rewrite_after_each_step=not args.defer_qsp_rewrite,
+        qsp_calculation_precision=args.qsp_calculation_precision,
     )
     if args.profile_gates:
         profile_csv = format_gate_profiles_csv(result)

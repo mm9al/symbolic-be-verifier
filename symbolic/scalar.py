@@ -15,6 +15,7 @@ from sympy.parsing.sympy_parser import (
 )
 
 from . import profile
+from .interval import acb, ctx, is_ball, to_acb
 
 _DOUBLE_FLOAT_PRECISION_BITS = 64
 
@@ -49,6 +50,8 @@ def scalar_simplify(expr: sp.Expr) -> sp.Expr:
 
 
 def _scalar_simplify_impl(expr: sp.Expr) -> sp.Expr:
+    if is_ball(expr):
+        return expr
     if isinstance(expr, Number) and not isinstance(expr, sp.Basic):
         return expr
 
@@ -57,13 +60,15 @@ def _scalar_simplify_impl(expr: sp.Expr) -> sp.Expr:
     if getattr(sympified, "is_Float", False):
         if float_precision <= _DOUBLE_FLOAT_PRECISION_BITS:
             return float(sympified)
-        return sympified
+        with ctx.workprec(float_precision):
+            return to_acb(sympified)
     if float_precision > 0:
         if sympified.is_number:
             if float_precision <= _DOUBLE_FLOAT_PRECISION_BITS:
                 value = complex(sympified.evalf())
                 return value.real if value.imag == 0 else value
-            return sympified.evalf(_decimal_digits_for_binary_precision(float_precision))
+            with ctx.workprec(float_precision):
+                return to_acb(sympified)
         return sympified
 
     return _scalar_simplify_cached(sympified)
@@ -75,10 +80,6 @@ def _max_float_precision(expr: sp.Expr) -> int:
     if isinstance(expr, sp.Basic) and expr.has(sp.Float):
         return max(int(value._prec) for value in expr.atoms(sp.Float))
     return 0
-
-
-def _decimal_digits_for_binary_precision(precision: int) -> int:
-    return max(17, math.ceil(precision * math.log10(2)) + 2)
 
 
 @lru_cache(maxsize=1_000_000)
@@ -157,6 +158,8 @@ def _split_bare_trig_square(expr: sp.Expr) -> tuple[str, sp.Expr] | None:
 
 
 def cos_half(theta: sp.Expr) -> sp.Expr:
+    if is_ball(theta):
+        return (to_acb(theta) / 2).cos()
     numeric = _numeric_float(theta)
     if numeric is not None:
         return math.cos(numeric / 2)
@@ -164,6 +167,8 @@ def cos_half(theta: sp.Expr) -> sp.Expr:
 
 
 def sin_half(theta: sp.Expr) -> sp.Expr:
+    if is_ball(theta):
+        return (to_acb(theta) / 2).sin()
     numeric = _numeric_float(theta)
     if numeric is not None:
         return math.sin(numeric / 2)
@@ -171,6 +176,8 @@ def sin_half(theta: sp.Expr) -> sp.Expr:
 
 
 def exp_minus_i_half(theta: sp.Expr) -> sp.Expr:
+    if is_ball(theta):
+        return (-acb(0, 1) * to_acb(theta) / 2).exp()
     numeric = _numeric_float(theta)
     if numeric is not None:
         return cmath.exp(-0.5j * numeric)
@@ -178,6 +185,8 @@ def exp_minus_i_half(theta: sp.Expr) -> sp.Expr:
 
 
 def exp_plus_i_half(theta: sp.Expr) -> sp.Expr:
+    if is_ball(theta):
+        return (acb(0, 1) * to_acb(theta) / 2).exp()
     numeric = _numeric_float(theta)
     if numeric is not None:
         return cmath.exp(0.5j * numeric)

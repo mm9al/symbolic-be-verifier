@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT))
 from symbolic.qasm_parser import parse_qasm_file  # noqa: E402
 from symbolic.verify import (  # noqa: E402
     DEFAULT_MAX_APPROXIMATION_GRID_POINTS,
+    DEFAULT_QSP_CALCULATION_PRECISION,
     PASS,
     gate_profile_fieldnames,
     gate_profile_rows,
@@ -249,6 +250,7 @@ def _run_benchmark_inner(
                 result.qsp_polynomial,
                 tau=float(row["tau"]),
                 epsilon=float(row["epsilon"]),
+                precision=DEFAULT_QSP_CALCULATION_PRECISION,
                 max_grid_points=max_approx_grid_points,
             )
             approx_runtime_sec = f"{time.perf_counter() - approx_started:.9f}"

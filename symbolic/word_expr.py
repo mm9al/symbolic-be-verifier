@@ -3,10 +3,13 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Dict, Iterable, Mapping, Tuple
+from typing import Any, Dict, Iterable, Mapping, Tuple
 
 import sympy as sp
 
+from .interval import add as scalar_add
+from .interval import format_ball, is_ball, is_exact_zero
+from .interval import multiply as scalar_multiply
 from .scalar import scalar_simplify
 
 
@@ -21,17 +24,17 @@ GARBAGE_ATOMS = frozenset(("G", "Gd", "A", "Ad", "C", "Cd"))
 class WordExpr:
     """A noncommutative polynomial over QSP/QSVT block atoms."""
 
-    terms: Mapping[Word, sp.Expr]
+    terms: Mapping[Word, Any]
 
     def __post_init__(self) -> None:
-        cleaned: Dict[Word, sp.Expr] = {}
+        cleaned: Dict[Word, Any] = {}
         for word, coeff in self.terms.items():
             key = tuple(word)
             for atom in key:
                 if atom not in ATOMS:
                     raise ValueError(f"Unsupported QSP atom: {atom!r}")
             simplified = scalar_simplify(coeff)
-            if simplified != 0:
+            if not is_exact_zero(simplified):
                 cleaned[key] = simplified
         object.__setattr__(self, "terms", cleaned)
 
@@ -55,9 +58,10 @@ class WordExpr:
     def simplify(self) -> "WordExpr":
         return WordExpr(self.terms)
 
-    def scale(self, coeff: sp.Expr) -> "WordExpr":
-        coeff = sp.sympify(coeff)
-        return WordExpr({word: coeff * value for word, value in self.terms.items()})
+    def scale(self, coeff: Any) -> "WordExpr":
+        if not is_ball(coeff):
+            coeff = sp.sympify(coeff)
+        return WordExpr({word: scalar_multiply(coeff, value) for word, value in self.terms.items()})
 
     def with_num_qubits(self, num_qubits: int) -> "WordExpr":
         return self
@@ -72,7 +76,7 @@ class WordExpr:
     def __add__(self, other: "WordExpr") -> "WordExpr":
         terms = dict(self.terms)
         for word, coeff in other.terms.items():
-            terms[word] = terms.get(word, sp.Integer(0)) + coeff
+            terms[word] = scalar_add(terms.get(word, sp.Integer(0)), coeff)
         return WordExpr(terms)
 
     def __sub__(self, other: "WordExpr") -> "WordExpr":
@@ -82,16 +86,17 @@ class WordExpr:
         return self.scale(-1)
 
     def __mul__(self, other: "WordExpr") -> "WordExpr":
-        terms: Dict[Word, sp.Expr] = {}
+        terms: Dict[Word, Any] = {}
         for left_word, left_coeff in self.terms.items():
             for right_word, right_coeff in other.terms.items():
                 key = left_word + right_word
-                terms[key] = terms.get(key, sp.Integer(0)) + left_coeff * right_coeff
+                product_coeff = scalar_multiply(left_coeff, right_coeff)
+                terms[key] = scalar_add(terms.get(key, sp.Integer(0)), product_coeff)
         return WordExpr(terms)
 
     def equals(self, other: "WordExpr") -> bool:
         diff = self - other
-        return all(scalar_simplify(coeff) == 0 for coeff in diff.terms.values())
+        return all(is_exact_zero(scalar_simplify(coeff)) for coeff in diff.terms.values())
 
     def __str__(self) -> str:
         if not self.terms:
@@ -170,10 +175,12 @@ def rewrite_once(expr: WordExpr) -> tuple[WordExpr, bool]:
 
 
 def eliminate(expr: WordExpr) -> WordExpr:
-    terms: Dict[Word, sp.Expr] = defaultdict(lambda: sp.Integer(0))
+    terms: Dict[Word, Any] = defaultdict(lambda: sp.Integer(0))
     for word, coeff in expr.terms.items():
         for normalized_word, normalized_coeff in _normalize_word_items(tuple(word)):
-            terms[normalized_word] += coeff * normalized_coeff
+            terms[normalized_word] = scalar_add(
+                terms[normalized_word], scalar_multiply(coeff, normalized_coeff)
+            )
     return WordExpr(terms)
 
 
@@ -188,11 +195,13 @@ def _normalize_word_items(word: Word) -> Tuple[Tuple[Word, sp.Expr], ...]:
         return ((word, sp.Integer(1)),)
 
     index, rule = redex
-    terms: Dict[Word, sp.Expr] = defaultdict(lambda: sp.Integer(0))
+    terms: Dict[Word, Any] = defaultdict(lambda: sp.Integer(0))
     for replacement_word, replacement_coeff in rule.replacement:
         new_word = word[:index] + replacement_word + word[index + 2 :]
         for normalized_word, normalized_coeff in _normalize_word_items(new_word):
-            terms[normalized_word] += replacement_coeff * normalized_coeff
+            terms[normalized_word] = scalar_add(
+                terms[normalized_word], scalar_multiply(replacement_coeff, normalized_coeff)
+            )
 
     return _normalize_word_result_items(terms)
 
@@ -215,7 +224,7 @@ def _find_best_redex(word: Word) -> tuple[int, _WordRewriteRule] | None:
 def _normalize_word_result_items(terms: Mapping[Word, sp.Expr]) -> Tuple[Tuple[Word, sp.Expr], ...]:
     return tuple(
         sorted(
-            ((word, coeff) for word, coeff in terms.items() if coeff != 0),
+            ((word, coeff) for word, coeff in terms.items() if not is_exact_zero(coeff)),
             key=lambda item: _sort_key(item[0]),
         )
     )
@@ -226,9 +235,12 @@ def _sort_key(word: Word) -> Tuple[int, Tuple[int, ...]]:
     return (len(word), tuple(rank[atom_name] for atom_name in word))
 
 
-def _format_term(word: Word, coeff: sp.Expr) -> str:
-    coeff = sp.sympify(scalar_simplify(coeff))
+def _format_term(word: Word, coeff: Any) -> str:
+    coeff = scalar_simplify(coeff)
     body = "I" if not word else " ".join(word)
+    if is_ball(coeff):
+        return f"{format_ball(coeff)}*{body}"
+    coeff = sp.sympify(coeff)
     if coeff == 1:
         return body
     if coeff == -1:

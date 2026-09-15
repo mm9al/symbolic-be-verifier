@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Dict, Literal, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Literal, Mapping, Optional, Sequence, Tuple, Union
 
 import sympy as sp
 
 from .expr import OpExpr, identity, pauli, zero
+from .interval import format_ball, is_ball
 from .scalar import cos_half, exp_minus_i_half, exp_plus_i_half, sin_half
 from .word_expr import WordExpr, atom as word_atom
 
@@ -24,14 +25,15 @@ class UnsupportedGateError(ValueError):
 class Gate:
     name: str
     qubits: Tuple[int, ...]
-    parameter: Optional[sp.Expr] = None
+    parameter: Optional[Any] = None
     raw: str = ""
 
     def __str__(self) -> str:
         operands = ", ".join(f"q[{index}]" for index in self.qubits)
         if self.parameter is None:
             return f"{self.name} {operands}"
-        return f"{self.name}({sp.sstr(self.parameter)}) {operands}"
+        parameter = format_ball(self.parameter) if is_ball(self.parameter) else sp.sstr(self.parameter)
+        return f"{self.name}({parameter}) {operands}"
 
 
 @dataclass(frozen=True)

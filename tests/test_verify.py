@@ -2,6 +2,9 @@ from pathlib import Path
 
 import pytest
 import sympy as sp
+from flint import acb, arb, ctx
+
+import symbolic.verify as verify_module
 
 from symbolic.branch_state import BranchState, Gate, UnsupportedGateError
 from symbolic.expr import parse_operator_expression, pauli
@@ -382,8 +385,22 @@ def test_uhdg_uh_opaque_reduces_to_identity():
 
     assert result.success is True
     assert result.status == PASS
+    assert result.final_state.top_left() == WordExpr.identity()
     assert result.qsp_normalized == WordExpr.identity()
     assert result.qsp_polynomial == 1
+
+    deferred_result = verify_qasm_file(
+        path,
+        ancillas=(0, 1),
+        systems=(2,),
+        base="(X - Z)/2",
+        expected_polynomial="1",
+        rewrite_after_each_step=False,
+    )
+
+    assert deferred_result.final_state.top_left() != WordExpr.identity()
+    assert deferred_result.qsp_normalized == result.qsp_normalized
+    assert deferred_result.qsp_polynomial == result.qsp_polynomial
 
 
 def test_qsp_polynomial_check_requires_hermitian_base_to_rewrite_hdg(tmp_path):
@@ -559,6 +576,44 @@ def test_qsp_target_exp_check_fits_beta_before_measuring_error():
     assert check.beta == pytest.approx(4.0 + 0j)
     assert check.max_grid_error == pytest.approx(0.0)
     assert check.success is True
+
+
+def test_qsp_acb_coefficients_are_created_at_requested_precision():
+    x = sp.Symbol("x")
+    polynomial = sp.expand((x - 1) ** 80)
+
+    coefficients = verify_module._acb_polynomial_coefficients(polynomial, precision=60)
+    with ctx.workdps(60):
+        value = verify_module._eval_acb_polynomial(coefficients, arb(1))
+
+    assert value.abs_upper() < arb("1e-50")
+
+
+def test_scalar_close_does_not_accept_a_ball_that_crosses_tolerance():
+    with ctx.workdps(60):
+        uncertain = acb(arb("0.9e-8", "0.2e-8"))
+
+    assert scalar_close(uncertain, 0, tol=1e-8) is False
+
+
+def test_block_encoding_acceptance_uses_residual_upper_bound():
+    with ctx.workdps(60):
+        # For one system qubit, epsilon / sqrt(2) is about 7.071e-5.
+        uncertain_residual = acb(arb("6.5e-5", "1e-5"))
+        actual = pauli("X") + pauli("Z").scale(uncertain_residual)
+        target = pauli("X")
+
+    check = block_encoding_proportionality_check(
+        actual,
+        target,
+        epsilon=1e-4,
+        residual_tolerance=0,
+    )
+
+    assert float(uncertain_residual.real.mid()) < check.threshold  # midpoint-style result would pass
+    assert check.residual_norm > check.threshold
+    assert check.residual_norm_upper > check.acceptance_threshold_ball
+    assert check.success is False
 
 
 def test_qsp_target_exp_grid_uses_lipschitz_chebyshev_bound():

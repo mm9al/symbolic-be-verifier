@@ -23,8 +23,60 @@ from symbolic.qsp import example_tag, full_hamsim_qasm_file, generate_full_hamsi
 
 DEFAULT_BLOCK_ENCODING_SIZES = (2, 3, 4, 5, 6, 7, 8, 9, 10, 16, 17, 32, 33, 64, 65, 128, 256)
 DEFAULT_BLOCK_ENCODING_SIZE_SPEC = ",".join(str(size) for size in DEFAULT_BLOCK_ENCODING_SIZES)
-DEFAULT_HAMSIM_T_VALUES = (0.1, 0.5, 1.0, 2.0, 4.0)
-DEFAULT_HAMSIM_EPSILONS = (1e-1, 1e-4, 1e-6, 1e-10, 1e-12)
+DEFAULT_HAMSIM_T_VALUES = (
+    0.1,
+    0.5,
+    1.0,
+    2.0,
+    4.0,
+    5.0,
+    6.0,
+    8.0,
+    9.0,
+    10.0,
+    11.0,
+    13.0,
+    14.0,
+    15.0,
+    17.0,
+    18.0,
+    20.0,
+    22.0,
+    23.0,
+    24.0,
+    26.0,
+    27.0,
+    28.0,
+    30.0,
+    32.0,
+    33.0,
+    34.0,
+    36.0,
+    38.0,
+    39.0,
+    40.0,
+    42.0,
+    43.0,
+    44.0,
+    46.0,
+    48.0,
+    49.0,
+    50.0,
+)
+DEFAULT_HAMSIM_EPSILONS = (
+    1e-1,
+    1e-2,
+    1e-3,
+    1e-4,
+    1e-5,
+    1e-6,
+    1e-7,
+    1e-8,
+    1e-9,
+    1e-10,
+    1e-11,
+    1e-12,
+)
 DEFAULT_HAMSIM_PRECISION = 17
 DEFAULT_BLOCK_ENCODING_ANGLE_PRECISION = 60
 
@@ -725,6 +777,19 @@ def _parse_sizes(text: str) -> tuple[int, ...]:
     return tuple(dict.fromkeys(sizes))
 
 
+def _parse_float_values(text: str, *, label: str) -> tuple[float, ...]:
+    values = tuple(
+        float(piece.strip())
+        for piece in text.split(",")
+        if piece.strip()
+    )
+    if not values:
+        raise ValueError(f"At least one {label} is required")
+    if any(not math.isfinite(value) for value in values):
+        raise ValueError(f"{label.capitalize()}s must be finite")
+    return tuple(dict.fromkeys(values))
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate RQ1 block-encoding benchmark QASM files.")
     parser.add_argument(
@@ -763,6 +828,16 @@ def hamsim_main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate RQ2 Hamiltonian-simulation QSP benchmark QASM files.")
     parser.add_argument("--out-dir", type=Path, default=ROOT / "benchmarks" / "hamsim")
     parser.add_argument("--precision", type=int, default=DEFAULT_HAMSIM_PRECISION)
+    parser.add_argument(
+        "--t-values",
+        default=",".join(_format_float(value) for value in DEFAULT_HAMSIM_T_VALUES),
+        help="Comma-separated simulation times for the fixed-epsilon vary_t axis.",
+    )
+    parser.add_argument(
+        "--epsilons",
+        default=",".join(_format_float(value) for value in DEFAULT_HAMSIM_EPSILONS),
+        help="Comma-separated error tolerances for the fixed-time vary_epsilon axis.",
+    )
     args = parser.parse_args(argv)
 
     out_dir = args.out_dir
@@ -772,7 +847,11 @@ def hamsim_main(argv: Sequence[str] | None = None) -> int:
         shutil.rmtree(generated_dir)
 
     rows = []
-    benchmarks = hamsim_suite(precision=args.precision)
+    benchmarks = hamsim_suite(
+        t_values=_parse_float_values(args.t_values, label="t value"),
+        epsilons=_parse_float_values(args.epsilons, label="epsilon"),
+        precision=args.precision,
+    )
     for benchmark in benchmarks:
         qasm_path = generated_dir / benchmark.axis / f"{benchmark.benchmark_id}.qasm"
         write_hamsim_qasm(benchmark, qasm_path)

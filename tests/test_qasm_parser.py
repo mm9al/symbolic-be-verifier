@@ -1,4 +1,5 @@
 import sympy as sp
+from flint import arb, ctx
 
 from symbolic.qasm_parser import parse_qasm_text
 
@@ -35,6 +36,25 @@ def test_parse_qasm3_register_and_parameterized_gate():
     assert gates[0].qubits == (0,)
     assert gates[0].parameter.has(sp.Float)
     assert abs(float(gates[0].parameter.evalf()) - float(sp.pi / 2)) < 1e-15
+
+
+def test_parse_numeric_angle_can_preserve_decimal_at_high_precision():
+    decimal = "0.12345678901234567"
+    gates = parse_qasm_text(
+        f"""
+        OPENQASM 2.0;
+        qreg q[1];
+        rz({decimal}) q[0];
+        """,
+        numeric_precision=60,
+    )
+
+    parameter = gates[0].parameter
+    assert isinstance(parameter, arb)
+    with ctx.workdps(60):
+        exact_decimal = arb("12345678901234567/100000000000000000")
+        assert parameter.contains(exact_decimal)
+        assert parameter.rad() < arb("1e-59")
 
 
 def test_parse_symbolic_rotation_parameter():

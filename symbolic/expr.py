@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 import time
-from typing import Dict, Iterable, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
 
 import sympy as sp
 from sympy.parsing.sympy_parser import (
@@ -14,6 +14,10 @@ from sympy.parsing.sympy_parser import (
 )
 
 from . import profile
+from .interval import add as scalar_add
+from .interval import format_ball, is_ball, is_exact_zero
+from .interval import multiply as scalar_multiply
+from .interval import subtract as scalar_subtract
 from .scalar import scalar_simplify
 
 
@@ -40,8 +44,8 @@ _PAULI_PRODUCT = {
 }
 
 
-def _clean_terms(terms: Mapping[PauliString, sp.Expr], num_qubits: int) -> Dict[PauliString, sp.Expr]:
-    cleaned: Dict[PauliString, sp.Expr] = {}
+def _clean_terms(terms: Mapping[PauliString, Any], num_qubits: int) -> Dict[PauliString, Any]:
+    cleaned: Dict[PauliString, Any] = {}
     for pauli_string, coeff in terms.items():
         key = tuple(pauli_string)
         if len(key) != num_qubits:
@@ -50,7 +54,7 @@ def _clean_terms(terms: Mapping[PauliString, sp.Expr], num_qubits: int) -> Dict[
             if pauli_op not in PAULI_ORDER:
                 raise ValueError(f"Unsupported Pauli operator: {pauli_op!r}")
         simplified = scalar_simplify(coeff)
-        if simplified != 0:
+        if not is_exact_zero(simplified):
             cleaned[key] = simplified
     return cleaned
 
@@ -59,7 +63,7 @@ def _clean_terms(terms: Mapping[PauliString, sp.Expr], num_qubits: int) -> Dict[
 class OpExpr:
     """A symbolic operator over system qubits in the Pauli-string basis."""
 
-    terms: Mapping[PauliString, sp.Expr]
+    terms: Mapping[PauliString, Any]
     num_qubits: int = 1
 
     def __post_init__(self) -> None:
@@ -98,10 +102,11 @@ class OpExpr:
     def simplify(self) -> "OpExpr":
         return OpExpr(self.terms, num_qubits=self.num_qubits)
 
-    def scale(self, coeff: sp.Expr) -> "OpExpr":
-        coeff = sp.sympify(coeff)
+    def scale(self, coeff: Any) -> "OpExpr":
+        if not is_ball(coeff):
+            coeff = sp.sympify(coeff)
         return OpExpr(
-            {pauli_string: coeff * value for pauli_string, value in self.terms.items()},
+            {pauli_string: scalar_multiply(coeff, value) for pauli_string, value in self.terms.items()},
             num_qubits=self.num_qubits,
         )
 
@@ -122,7 +127,7 @@ class OpExpr:
         try:
             terms = dict(left.terms)
             for pauli_string, coeff in right.terms.items():
-                terms[pauli_string] = terms.get(pauli_string, sp.Integer(0)) + coeff
+                terms[pauli_string] = scalar_add(terms.get(pauli_string, sp.Integer(0)), coeff)
         finally:
             if started is not None:
                 profile.add_combine(time.perf_counter() - started)
@@ -138,7 +143,7 @@ class OpExpr:
         left, right = _align_exprs(self, other)
         started = time.perf_counter() if profile.current() is not None else None
         try:
-            terms: Dict[PauliString, sp.Expr] = {}
+            terms: Dict[PauliString, Any] = {}
             for left_string, left_coeff in left.terms.items():
                 for right_string, right_coeff in right.terms.items():
                     phase = sp.Integer(1)
@@ -148,7 +153,8 @@ class OpExpr:
                         phase *= local_phase
                         product.append(local_product)
                     key = tuple(product)
-                    terms[key] = terms.get(key, sp.Integer(0)) + left_coeff * right_coeff * phase
+                    product_coeff = scalar_multiply(scalar_multiply(left_coeff, right_coeff), phase)
+                    terms[key] = scalar_add(terms.get(key, sp.Integer(0)), product_coeff)
         finally:
             if started is not None:
                 profile.add_combine(time.perf_counter() - started)
@@ -156,7 +162,7 @@ class OpExpr:
 
     def equals(self, other: "OpExpr") -> bool:
         diff = self - other
-        return all(scalar_simplify(coeff) == 0 for coeff in diff.terms.values())
+        return all(is_exact_zero(scalar_simplify(coeff)) for coeff in diff.terms.values())
 
     def __str__(self) -> str:
         if not self.terms:
@@ -164,7 +170,9 @@ class OpExpr:
 
         ordered = [(key, self.terms[key]) for key in sorted(self.terms, key=_sort_key)]
         common = ordered[0][1]
-        if len(ordered) > 1 and all(scalar_simplify(coeff - common) == 0 for _, coeff in ordered):
+        if len(ordered) > 1 and all(
+            is_exact_zero(scalar_simplify(scalar_subtract(coeff, common))) for _, coeff in ordered
+        ):
             inside = " + ".join(_format_pauli_string(key, self.num_qubits) for key, _ in ordered)
             return _format_common_factor(inside, common)
 
@@ -204,12 +212,16 @@ def _format_pauli_string(pauli_string: PauliString, num_qubits: int) -> str:
     return " ".join(f"{op}_{index}" for index, op in active)
 
 
-def _format_scalar(coeff: sp.Expr) -> str:
+def _format_scalar(coeff: Any) -> str:
+    if is_ball(coeff):
+        return format_ball(coeff)
     return sp.sstr(scalar_simplify(coeff)).replace("I", "i")
 
 
-def _format_common_factor(inside: str, coeff: sp.Expr) -> str:
+def _format_common_factor(inside: str, coeff: Any) -> str:
     coeff = scalar_simplify(coeff)
+    if is_ball(coeff):
+        return f"{_format_scalar(coeff)}*({inside})"
     coeff_expr = sp.sympify(coeff)
     if coeff == 1:
         return inside
@@ -222,8 +234,10 @@ def _format_common_factor(inside: str, coeff: sp.Expr) -> str:
     return f"{_format_scalar(coeff)}*({inside})"
 
 
-def _format_term(pauli_string: PauliString, coeff: sp.Expr, num_qubits: int) -> str:
+def _format_term(pauli_string: PauliString, coeff: Any, num_qubits: int) -> str:
     coeff = scalar_simplify(coeff)
+    if is_ball(coeff):
+        return f"{_format_scalar(coeff)}*{_format_pauli_string(pauli_string, num_qubits)}"
     coeff_expr = sp.sympify(coeff)
     body = _format_pauli_string(pauli_string, num_qubits)
     if coeff == 1:
@@ -237,8 +251,10 @@ def _format_term(pauli_string: PauliString, coeff: sp.Expr, num_qubits: int) -> 
     return f"{_format_factor_scalar(coeff)}*{body}"
 
 
-def _format_factor_scalar(coeff: sp.Expr) -> str:
+def _format_factor_scalar(coeff: Any) -> str:
     text = _format_scalar(coeff)
+    if is_ball(coeff):
+        return text
     if sp.sympify(coeff).is_Add:
         return f"({text})"
     return text

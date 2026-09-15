@@ -8,10 +8,12 @@ import sympy as sp
 from sympy.parsing.sympy_parser import (
     implicit_multiplication_application,
     parse_expr,
+    rationalize,
     standard_transformations,
 )
 
 from .branch_state import Gate
+from .interval import ctx, to_arb
 from .scalar import parse_scalar
 
 
@@ -25,11 +27,13 @@ class QASMParseError(ValueError):
     pass
 
 
-def parse_qasm_file(path: str | Path) -> List[Gate]:
-    return parse_qasm_text(Path(path).read_text())
+def parse_qasm_file(path: str | Path, *, numeric_precision: int | None = None) -> List[Gate]:
+    return parse_qasm_text(Path(path).read_text(), numeric_precision=numeric_precision)
 
 
-def parse_qasm_text(text: str) -> List[Gate]:
+def parse_qasm_text(text: str, *, numeric_precision: int | None = None) -> List[Gate]:
+    if numeric_precision is not None and numeric_precision < 1:
+        raise ValueError("numeric_precision must be positive")
     gates: List[Gate] = []
     known_register: Optional[str] = None
 
@@ -51,7 +55,11 @@ def parse_qasm_text(text: str) -> List[Gate]:
 
         name, parameter_text, operands_text = match.groups()
         qubits = _parse_operands(operands_text, known_register, line_number)
-        parameter = _parse_parameter(parameter_text) if parameter_text is not None else None
+        parameter = (
+            _parse_parameter(parameter_text, numeric_precision=numeric_precision)
+            if parameter_text is not None
+            else None
+        )
         gates.append(Gate(name=name.lower(), qubits=tuple(qubits), parameter=parameter, raw=line))
 
     return gates
@@ -99,9 +107,9 @@ def _parse_operands(text: str, known_register: Optional[str], line_number: int) 
     return operands
 
 
-def _parse_parameter(text: str) -> sp.Expr:
+def _parse_parameter(text: str, *, numeric_precision: int | None) -> sp.Expr:
     if _contains_decimal_literal(text):
-        return _parse_numeric_angle(text)
+        return _parse_numeric_angle(text, numeric_precision=numeric_precision)
     return parse_scalar(text)
 
 
@@ -109,7 +117,7 @@ def _contains_decimal_literal(text: str) -> bool:
     return bool(re.search(r"(?<![A-Za-z_])(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?|(?<![A-Za-z_])\d+[eE][+-]?\d+", text))
 
 
-def _parse_numeric_angle(text: str) -> sp.Expr:
+def _parse_numeric_angle(text: str, *, numeric_precision: int | None) -> sp.Expr:
     local_dict = {
         "I": sp.I,
         "i": sp.I,
@@ -120,9 +128,17 @@ def _parse_numeric_angle(text: str) -> sp.Expr:
         "exp": sp.exp,
     }
     transformations = standard_transformations + (implicit_multiplication_application,)
-    return parse_expr(
+    if numeric_precision is not None:
+        # Rationalize decimal tokens before evaluation so increasing precision does
+        # not merely pad an already-rounded binary64 value with zero information.
+        transformations += (rationalize,)
+    parsed = parse_expr(
         text,
         local_dict=local_dict,
         transformations=transformations,
         evaluate=True,
     )
+    if numeric_precision is None:
+        return parsed
+    with ctx.workdps(numeric_precision):
+        return to_arb(parsed)

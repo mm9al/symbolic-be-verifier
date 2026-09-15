@@ -9,6 +9,7 @@ import sympy as sp
 from symbolic.expr import parse_operator_expression
 from symbolic.qasm_parser import parse_qasm_file
 from symbolic.qsp import (
+    QSP_QASM_ANGLE_PRECISION,
     QasmGate,
     adjoint_gate,
     build_raw_qsp_gate_list,
@@ -142,6 +143,37 @@ def test_full_hamsim_qasm_snippet_uses_interleaved_phase_multiplexing():
     assert "h q[1];\ns q[1];\nx q[1];" in snippet
     assert "// combine 1/2 * (E_cos - i E_sin)" in snippet
     assert snippet.endswith("sdg q[0];\nh q[0];")
+
+
+def test_generated_qsp_rotations_keep_all_binary64_significant_digits():
+    snippet = full_hamsim_qasm_snippet(
+        {
+            "component": "cos",
+            "degree": 0,
+            "pyqsp_phases": [0.12345678901234567],
+            "qsvt_projector_phases": [0.12345678901234567],
+            "qasm_rz_angles": [-0.24691357802469134],
+        },
+        {
+            "component": "sin",
+            "degree": 1,
+            "pyqsp_phases": [0.12345678901234567, 0.23456789012345678],
+            "qsvt_projector_phases": [0.12345678901234567, 0.23456789012345678],
+            "qasm_rz_angles": [-0.24691357802469134, -0.46913578024691356],
+        },
+        selector_qubit="q[0]",
+        component_selector_qubit="q[1]",
+        phase_qubit="q[2]",
+        block_ancillas=["q[3]"],
+        system_qubits=["q[4]"],
+        signal_gate="UH",
+        signal_gate_dagger="UHdg",
+        controlled_signal_gate="cUH",
+        controlled_signal_gate_dagger="cUHdg",
+    )
+
+    assert QSP_QASM_ANGLE_PRECISION == 17
+    assert "0.12345678901234566" in snippet
 
 
 def test_full_hamsim_qasm_snippet_uses_degree_dependent_component_extraction():
@@ -394,6 +426,7 @@ def test_teacher_degree4_qsp_example_matches_hand_symbolic_table():
         hermitian_base=True,
         compare_polynomial_only=True,
         keep_trace=True,
+        rewrite_after_each_step=False,
     )
 
     assert result.status == PASS

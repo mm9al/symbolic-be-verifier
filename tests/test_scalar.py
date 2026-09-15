@@ -1,5 +1,7 @@
 import sympy as sp
+from flint import acb, arb, ctx
 
+from symbolic.interval import to_acb, to_arb
 from symbolic.scalar import cos_half, exp_plus_i_half, parse_scalar, scalar_simplify, sin_half
 
 
@@ -43,7 +45,7 @@ def test_scalar_simplify_skips_exact_simplify_for_float_numbers():
     assert isinstance(value, float)
 
 
-def test_high_precision_numeric_angles_stay_high_precision():
+def test_high_precision_numeric_angles_become_rigorous_balls():
     theta = sp.Float(
         "0.78539816339744830961566084581987572104929234984377645524373614807695410157155225",
         80,
@@ -51,6 +53,13 @@ def test_high_precision_numeric_angles_stay_high_precision():
 
     value = cos_half(theta)
 
-    assert isinstance(value, sp.Float)
-    assert value._prec > 200
-    assert abs(value - sp.N(sp.cos(theta / 2), 80)) < sp.Float("1e-75", 80)
+    assert isinstance(value, acb)
+    with ctx.workdps(80):
+        expected = (to_acb(theta) / 2).cos()
+        assert value.overlaps(expected)
+        assert value.rad() < arb("1e-75")
+
+
+def test_float_configuration_values_keep_their_decimal_spelling():
+    with ctx.workdps(60):
+        assert (to_arb(1e-4) - arb("1/10000")).contains(0)
