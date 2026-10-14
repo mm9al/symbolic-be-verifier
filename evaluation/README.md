@@ -23,8 +23,7 @@ runner multiplies the manifest's normalized expected block by the declared
 `alpha` to recover the target Hamiltonian `H`, infers the best real positive
 `alpha`, and accepts when the coefficient residual is at most
 `epsilon / 2^(n/2)`. The default `--block-encoding-epsilon` is `1e-8`, and
-the optional `--block-encoding-residual-tolerance` numerical floor defaults to
-`0` so the default run follows the paper threshold exactly. Use
+this paper threshold is the only approximate acceptance threshold. Use
 `--check-mode exact` only for the older exact comparison against the normalized
 top-left block.
 
@@ -45,10 +44,9 @@ evaluation/results/block_encoding_results.csv
 ```
 
 The RQ1 CSV includes `check_mode`, `check_epsilon`, `inferred_alpha`,
-`residual_norm`, `residual_threshold`, `residual_numerical_tolerance`, and
-`residual_acceptance_threshold` so paper-mode results record the final
-proportionality check data explicitly. `residual_norm` is the rigorous Arb upper
-bound used for acceptance, not a coefficient midpoint.
+`residual_norm`, and `residual_threshold` so paper-mode results record the
+final proportionality check data explicitly. `residual_norm` is the rigorous
+Arb upper bound used for acceptance, not a coefficient midpoint.
 
 The default sizes are the consecutive integers `n = 2..128`.
 All three families use the same `ry`-based uniform PREP generator, including

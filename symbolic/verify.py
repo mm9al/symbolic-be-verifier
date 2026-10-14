@@ -13,7 +13,7 @@ from typing import Any, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import sympy as sp
 
-from .branch_state import BranchState, Gate
+from .branch_state import BranchState, Gate, UnsupportedGateError
 from .expr import OpExpr, parse_operator_expression
 from .interval import acb, arb, ctx, format_ball, is_ball, is_exact_zero, to_acb, to_arb
 from .interval import divide as scalar_divide
@@ -31,7 +31,6 @@ PASS_UP_TO_SCALE = "PASS_UP_TO_SCALE"
 FAIL = "FAIL"
 FAIL_GARBAGE = "FAIL_GARBAGE"
 DEFAULT_TOLERANCE = 1e-8
-DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE = 1e-12
 DEFAULT_BLOCK_ENCODING_CHECK_PRECISION = 60
 DEFAULT_QSP_CALCULATION_PRECISION = 60
 BALL_PRECISION_DIGITS_PER_SYSTEM_QUBIT = 2
@@ -113,19 +112,17 @@ class BlockEncodingProportionalityCheck:
     projection_length: float
     residual_norm: float
     threshold: float
-    numerical_tolerance: float
-    acceptance_threshold: float
     coefficient_norm: float
     target_norm: float
     alpha_ball: arb
     residual_norm_upper: arb
-    acceptance_threshold_ball: arb
+    threshold_ball: arb
 
     @property
     def success(self) -> bool:
         return bool(
             self.alpha_ball.lower() > 0
-            and self.residual_norm_upper <= self.acceptance_threshold_ball.lower()
+            and self.residual_norm_upper <= self.threshold_ball.lower()
         )
 
 
@@ -146,7 +143,6 @@ class VerificationResult:
     qsp_status: Optional[str] = None
     qsp_polynomial_only: bool = False
     block_encoding_epsilon: Optional[float] = None
-    block_encoding_residual_tolerance: float = DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE
     tolerance: float = DEFAULT_TOLERANCE
 
     @property
@@ -171,7 +167,6 @@ class VerificationResult:
                 top_left,
                 self.expected,
                 epsilon=self.block_encoding_epsilon,
-                residual_tolerance=self.block_encoding_residual_tolerance,
             )
             return PASS if check.success else FAIL
         if pauli_expr_close(top_left, self.expected, tol=self.tolerance):
@@ -200,7 +195,6 @@ class VerificationResult:
             top_left,
             self.expected,
             epsilon=self.block_encoding_epsilon,
-            residual_tolerance=self.block_encoding_residual_tolerance,
         )
 
 
@@ -310,7 +304,6 @@ def verify_qasm_file(
     target_exp_scale: str | sp.Expr = 1,
     max_approx_grid_points: int | None = DEFAULT_MAX_APPROXIMATION_GRID_POINTS,
     block_encoding_epsilon: float | None = None,
-    block_encoding_residual_tolerance: float = DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE,
     tolerance: float = DEFAULT_TOLERANCE,
 ) -> VerificationResult:
     if qsp_calculation_precision < 1:
@@ -324,8 +317,6 @@ def verify_qasm_file(
             raise ValueError("--block-encoding-epsilon must be positive")
         if expected is None:
             raise ValueError("--block-encoding-epsilon requires --expected")
-    if block_encoding_residual_tolerance < 0:
-        raise ValueError("--block-encoding-residual-tolerance must be nonnegative")
     selected_modes = sum(
         (
             expected is not None,
@@ -352,6 +343,8 @@ def verify_qasm_file(
         or any(_is_qsp_word_gate(gate.name) for gate in gates)
         else "op"
     )
+    if expression_kind == "word":
+        _validate_qsp_canonical_form(gates, ancillas=ancilla_qubits, systems=system_qubits)
     result = run_circuit(
         gates,
         ancillas=ancilla_qubits,
@@ -428,7 +421,6 @@ def verify_qasm_file(
         qsp_status=qsp_status,
         qsp_polynomial_only=compare_polynomial_only,
         block_encoding_epsilon=block_encoding_epsilon,
-        block_encoding_residual_tolerance=block_encoding_residual_tolerance,
         tolerance=tolerance,
     )
 
@@ -469,11 +461,9 @@ def format_result(result: VerificationResult, *, show_trace: bool = False) -> st
                 lines.append(f"Projection length = {check.projection_length:.12g}")
                 lines.append(f"Coefficient residual upper bound = {check.residual_norm:.12g}")
                 lines.append(f"Coefficient residual threshold = {check.threshold:.12g}")
-                lines.append(f"Coefficient residual numerical tolerance = {check.numerical_tolerance:.12g}")
-                lines.append(f"Coefficient residual acceptance threshold = {check.acceptance_threshold:.12g}")
                 lines.append(
-                    "Coefficient residual acceptance threshold ball = "
-                    f"{format_ball(check.acceptance_threshold_ball, 12)}"
+                    "Coefficient residual threshold ball = "
+                    f"{format_ball(check.threshold_ball, 12)}"
                 )
         else:
             diff = result.final_state.top_left() - result.expected
@@ -484,11 +474,9 @@ def format_result(result: VerificationResult, *, show_trace: bool = False) -> st
                 lines.append(f"Projection length = {check.projection_length:.12g}")
                 lines.append(f"Coefficient residual upper bound = {check.residual_norm:.12g}")
                 lines.append(f"Coefficient residual threshold = {check.threshold:.12g}")
-                lines.append(f"Coefficient residual numerical tolerance = {check.numerical_tolerance:.12g}")
-                lines.append(f"Coefficient residual acceptance threshold = {check.acceptance_threshold:.12g}")
                 lines.append(
-                    "Coefficient residual acceptance threshold ball = "
-                    f"{format_ball(check.acceptance_threshold_ball, 12)}"
+                    "Coefficient residual threshold ball = "
+                    f"{format_ball(check.threshold_ball, 12)}"
                 )
             diff_label = "B0" if result.final_state.num_ancillas == 1 else f"B[{_format_key((0,) * result.final_state.num_ancillas)}]"
             lines.append(f"{diff_label} - expected = {diff}")
@@ -620,6 +608,147 @@ def _normalize_base(base: str | OpExpr, *, num_system_qubits: int) -> OpExpr:
 def _is_qsp_word_gate(name: str) -> bool:
     lowered = name.lower()
     return lowered in {"uh", "uhdg"} or re.fullmatch(r"c+uh(?:dg)?", lowered) is not None
+
+
+def _validate_qsp_canonical_form(
+    gates: Sequence[Gate],
+    *,
+    ancillas: Sequence[int],
+    systems: Sequence[int],
+) -> None:
+    """Reject QSP gates that do not preserve the zero/nonzero block abstraction."""
+
+    ancilla_set = set(ancillas)
+    system_set = set(systems)
+    signal_layouts: list[tuple[tuple[int, ...], tuple[int, ...]]] = []
+
+    for gate in gates:
+        control_count = _qsp_signal_control_count(gate.name)
+        if control_count is None:
+            continue
+        controls = gate.qubits[:control_count]
+        operands = gate.qubits[control_count:]
+        block_ancillas = tuple(qubit for qubit in operands if qubit in ancilla_set)
+        signal_systems = tuple(qubit for qubit in operands if qubit in system_set)
+        unknown = tuple(qubit for qubit in operands if qubit not in ancilla_set and qubit not in system_set)
+        if unknown or not block_ancillas or not signal_systems:
+            raise UnsupportedGateError(
+                f"{gate.name} must contain block ancillas and system qubits from the declared mappings"
+            )
+        if any(control not in ancilla_set for control in controls):
+            raise UnsupportedGateError(f"{gate.name} controls must be declared ancillas")
+        if set(controls) & set(block_ancillas):
+            raise UnsupportedGateError(f"{gate.name} selector controls cannot also be block ancillas")
+        signal_layouts.append((block_ancillas, signal_systems))
+
+    if not signal_layouts:
+        return
+
+    block_ancillas, signal_systems = signal_layouts[0]
+    block_set = set(block_ancillas)
+    for other_blocks, other_systems in signal_layouts[1:]:
+        if set(other_blocks) != block_set or tuple(other_systems) != tuple(signal_systems):
+            raise UnsupportedGateError(
+                "QSP canonical form requires every UH/UHdg invocation to use the same "
+                "block-ancilla and system registers"
+            )
+
+    # With one block ancilla, the non-principal subspace has only one branch,
+    # so the ordinary branch semantics already represents it exactly.
+    if len(block_set) == 1:
+        return
+
+    index = 0
+    while index < len(gates):
+        gate = gates[index]
+        if _is_qsp_word_gate(gate.name) or not (set(gate.qubits) & block_set):
+            index += 1
+            continue
+
+        prefix: list[int] = []
+        cursor = index
+        while cursor < len(gates):
+            candidate = gates[cursor]
+            if candidate.name.lower() != "x" or len(candidate.qubits) != 1 or candidate.qubits[0] not in block_set:
+                break
+            prefix.append(candidate.qubits[0])
+            cursor += 1
+
+        if len(prefix) != len(block_set) or set(prefix) != block_set:
+            raise UnsupportedGateError(
+                f"Gate {gate} distinguishes individual nonzero block-ancilla states; "
+                "QSP input must use canonical all-zero projector controls"
+            )
+        if cursor >= len(gates) or not _is_canonical_block_projector_control(
+            gates[cursor], block_set=block_set, ancilla_set=ancilla_set
+        ):
+            raise UnsupportedGateError(
+                "Open-control X gates on block ancillas must be followed by one controlled-X "
+                "whose controls include the complete block register"
+            )
+
+        controlled_x = gates[cursor]
+        cursor += 1
+        suffix = tuple(reversed(prefix))
+        if _matches_block_x_suffix(gates, cursor, suffix):
+            index = cursor + len(suffix)
+            continue
+
+        while cursor < len(gates) and not _same_gate(gates[cursor], controlled_x):
+            if set(gates[cursor].qubits) & block_set:
+                raise UnsupportedGateError(
+                    "A canonical block-projector phase sandwich may not access a block ancilla "
+                    "between its paired controlled-X gates"
+                )
+            cursor += 1
+        if cursor >= len(gates):
+            raise UnsupportedGateError("Unpaired controlled-X in block-projector phase sandwich")
+        cursor += 1
+        if not _matches_block_x_suffix(gates, cursor, suffix):
+            raise UnsupportedGateError(
+                "Block-projector phase sandwich must restore every open-control X in reverse order"
+            )
+        index = cursor + len(suffix)
+
+
+def _qsp_signal_control_count(name: str) -> int | None:
+    lowered = name.lower()
+    if lowered in {"uh", "uhdg"}:
+        return 0
+    match = re.fullmatch(r"(c+)uh(?:dg)?", lowered)
+    return len(match.group(1)) if match is not None else None
+
+
+def _is_canonical_block_projector_control(
+    gate: Gate,
+    *,
+    block_set: set[int],
+    ancilla_set: set[int],
+) -> bool:
+    if gate.name.lower() not in {"cx", "mcx"} or len(gate.qubits) < 2:
+        return False
+    controls = gate.qubits[:-1]
+    target = gate.qubits[-1]
+    return (
+        block_set.issubset(controls)
+        and len(set(controls)) == len(controls)
+        and all(control in ancilla_set for control in controls)
+        and target in ancilla_set - block_set
+        and target not in controls
+    )
+
+
+def _matches_block_x_suffix(gates: Sequence[Gate], start: int, suffix: tuple[int, ...]) -> bool:
+    if start + len(suffix) > len(gates):
+        return False
+    return all(
+        gates[start + offset].name.lower() == "x" and gates[start + offset].qubits == (qubit,)
+        for offset, qubit in enumerate(suffix)
+    )
+
+
+def _same_gate(left: Gate, right: Gate) -> bool:
+    return left.name.lower() == right.name.lower() and left.qubits == right.qubits and left.parameter == right.parameter
 
 
 def scalar_close(a: sp.Expr, b: sp.Expr, *, tol: float = DEFAULT_TOLERANCE) -> bool:
@@ -942,19 +1071,15 @@ def block_encoding_proportionality_check(
     target: OpExpr,
     *,
     epsilon: float,
-    residual_tolerance: float = DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE,
 ) -> BlockEncodingProportionalityCheck:
     if epsilon <= 0:
         raise ValueError("block_encoding_epsilon must be positive")
-    if residual_tolerance < 0:
-        raise ValueError("residual_tolerance must be nonnegative")
 
     with ctx.workdps(DEFAULT_BLOCK_ENCODING_CHECK_PRECISION):
         return _block_encoding_proportionality_check_balls(
             actual,
             target,
             epsilon=epsilon,
-            residual_tolerance=residual_tolerance,
         )
 
 
@@ -963,15 +1088,12 @@ def _block_encoding_proportionality_check_balls(
     target: OpExpr,
     *,
     epsilon: float,
-    residual_tolerance: float,
 ) -> BlockEncodingProportionalityCheck:
     actual, target = _align_operator_qubits(actual, target)
     actual_terms = _nonzero_terms(actual)
     target_terms = _nonzero_terms(target)
     pauli_strings = set(actual_terms) | set(target_terms)
     threshold_ball = to_arb(epsilon) / arb(2**actual.num_qubits).sqrt()
-    residual_tolerance_ball = to_arb(residual_tolerance)
-    acceptance_threshold_ball = threshold_ball.max(residual_tolerance_ball)
     if not pauli_strings:
         return _make_block_encoding_check(
             epsilon=epsilon,
@@ -979,8 +1101,6 @@ def _block_encoding_proportionality_check_balls(
             projection_length_ball=arb(0),
             residual_norm_upper=arb.pos_inf(),
             threshold_ball=threshold_ball,
-            residual_tolerance_ball=residual_tolerance_ball,
-            acceptance_threshold_ball=acceptance_threshold_ball,
             coefficient_norm_ball=arb(0),
             target_norm_ball=arb(0),
         )
@@ -1000,8 +1120,6 @@ def _block_encoding_proportionality_check_balls(
             projection_length_ball=arb(0),
             residual_norm_upper=arb.pos_inf(),
             threshold_ball=threshold_ball,
-            residual_tolerance_ball=residual_tolerance_ball,
-            acceptance_threshold_ball=acceptance_threshold_ball,
             coefficient_norm_ball=actual_norm_sq.sqrt(),
             target_norm_ball=target_norm_sq.sqrt(),
         )
@@ -1031,8 +1149,6 @@ def _block_encoding_proportionality_check_balls(
         projection_length_ball=projection_length_ball,
         residual_norm_upper=residual_norm_upper,
         threshold_ball=threshold_ball,
-        residual_tolerance_ball=residual_tolerance_ball,
-        acceptance_threshold_ball=acceptance_threshold_ball,
         coefficient_norm_ball=actual_norm,
         target_norm_ball=target_norm_sq.sqrt(),
     )
@@ -1054,8 +1170,6 @@ def _make_block_encoding_check(
     projection_length_ball: arb,
     residual_norm_upper: arb,
     threshold_ball: arb,
-    residual_tolerance_ball: arb,
-    acceptance_threshold_ball: arb,
     coefficient_norm_ball: arb,
     target_norm_ball: arb,
 ) -> BlockEncodingProportionalityCheck:
@@ -1065,13 +1179,11 @@ def _make_block_encoding_check(
         projection_length=float(projection_length_ball.mid()),
         residual_norm=_arb_upper_float(residual_norm_upper),
         threshold=float(threshold_ball.mid()),
-        numerical_tolerance=float(residual_tolerance_ball.mid()),
-        acceptance_threshold=float(acceptance_threshold_ball.mid()),
         coefficient_norm=float(coefficient_norm_ball.mid()),
         target_norm=float(target_norm_ball.mid()),
         alpha_ball=alpha_ball,
         residual_norm_upper=residual_norm_upper,
-        acceptance_threshold_ball=acceptance_threshold_ball,
+        threshold_ball=threshold_ball,
     )
 
 
@@ -1206,15 +1318,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "to the target Hamiltonian within this operator-norm tolerance."
         ),
     )
-    parser.add_argument(
-        "--block-encoding-residual-tolerance",
-        type=float,
-        default=DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE,
-        help=(
-            "Numerical floor for block-encoding coefficient residual checks with decimal QASM angles. "
-            f"Default: {DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE:g}."
-        ),
-    )
     parser.add_argument("--hermitian-base", action="store_true", help="Rewrite Hd atoms to H before QSP polynomial evaluation.")
     parser.add_argument(
         "--compare-polynomial-only",
@@ -1269,7 +1372,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         target_exp_scale=args.target_exp_scale,
         max_approx_grid_points=max_approx_grid_points,
         block_encoding_epsilon=args.block_encoding_epsilon,
-        block_encoding_residual_tolerance=args.block_encoding_residual_tolerance,
         tolerance=args.tolerance,
         profile_gates=args.profile_gates,
         rewrite_after_each_step=not args.defer_qsp_rewrite,

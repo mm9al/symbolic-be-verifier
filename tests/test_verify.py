@@ -222,7 +222,7 @@ def test_block_encoding_proportionality_rejects_negative_ray():
     assert check.alpha == pytest.approx(-1.0)
 
 
-def test_block_encoding_proportionality_accepts_decimal_roundoff_floor():
+def test_block_encoding_proportionality_uses_only_paper_threshold():
     actual = pauli("X", num_qubits=64)
     target = pauli("X", num_qubits=64) + pauli("Z", num_qubits=64).scale(sp.Float("1e-14"))
 
@@ -230,8 +230,7 @@ def test_block_encoding_proportionality_accepts_decimal_roundoff_floor():
 
     assert check.threshold < 1e-17
     assert check.residual_norm == pytest.approx(1e-14)
-    assert check.acceptance_threshold == pytest.approx(1e-12)
-    assert check.success is True
+    assert check.success is False
 
 
 def test_block_encoding_proportionality_uses_high_precision_residual_norm():
@@ -239,7 +238,7 @@ def test_block_encoding_proportionality_uses_high_precision_residual_norm():
     actual += pauli("Z", num_qubits=64).scale(sp.Float("0.2", 80))
     target = pauli("X", num_qubits=64) + pauli("Z", num_qubits=64).scale(2)
 
-    check = block_encoding_proportionality_check(actual, target, epsilon=1e-8, residual_tolerance=0)
+    check = block_encoding_proportionality_check(actual, target, epsilon=1e-8)
 
     assert check.threshold < 1e-17
     assert check.alpha == pytest.approx(10.0)
@@ -493,6 +492,56 @@ def test_parser_accepts_controlled_opaque_uh_declarations():
     assert gates[0].qubits == (0, 1, 2)
 
 
+def test_qsp_canonical_form_rejects_gate_that_distinguishes_nonzero_block_states(tmp_path):
+    path = tmp_path / "invalid_nonzero_branch_access.qasm"
+    path.write_text(
+        """
+        OPENQASM 2.0;
+        qreg q[3];
+        UH q[0], q[1], q[2];
+        z q[1];
+        UHdg q[0], q[1], q[2];
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(UnsupportedGateError, match="distinguishes individual nonzero block-ancilla states"):
+        verify_qasm_file(
+            path,
+            ancillas=(0, 1),
+            systems=(2,),
+            expected_polynomial="1",
+            hermitian_base=True,
+            compare_polynomial_only=True,
+        )
+
+
+def test_qsp_canonical_form_rejects_projector_control_on_only_part_of_block_register(tmp_path):
+    path = tmp_path / "invalid_partial_block_projector.qasm"
+    path.write_text(
+        """
+        OPENQASM 2.0;
+        qreg q[4];
+        UH q[1], q[2], q[3];
+        x q[1];
+        mcx q[1], q[0];
+        x q[1];
+        UHdg q[1], q[2], q[3];
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(UnsupportedGateError, match="canonical all-zero projector controls"):
+        verify_qasm_file(
+            path,
+            ancillas=(0, 1, 2),
+            systems=(3,),
+            expected_polynomial="1",
+            hermitian_base=True,
+            compare_polynomial_only=True,
+        )
+
+
 def test_qsp_t3_opaque_verifies_chebyshev_polynomial_on_hermitian_base():
     path = Path(__file__).parents[1] / "examples" / "qsp_t3_opaque.qasm"
     result = verify_qasm_file(
@@ -607,12 +656,11 @@ def test_block_encoding_acceptance_uses_residual_upper_bound():
         actual,
         target,
         epsilon=1e-4,
-        residual_tolerance=0,
     )
 
     assert float(uncertain_residual.real.mid()) < check.threshold  # midpoint-style result would pass
     assert check.residual_norm > check.threshold
-    assert check.residual_norm_upper > check.acceptance_threshold_ball
+    assert check.residual_norm_upper > check.threshold_ball
     assert check.success is False
 
 

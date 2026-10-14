@@ -17,6 +17,28 @@ Pauli-string multiplication.
 
 The goal is to verify the top-left block of a block-encoding circuit by checking the final all-zero branch $B_{00\cdots0}$.
 
+## Reproducible Environment
+
+The full verifier, benchmark generators, evaluation runners, and test suite are
+tested with Python 3.11. Create one environment containing both the core
+verifier and the QSP/Hamiltonian-simulation dependencies:
+
+```bash
+python3.11 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+Verify the installation before reproducing evaluation results:
+
+```bash
+.venv/bin/python -m pytest -q
+```
+
+The dependency versions in `requirements.txt` are pinned to the tested
+artifact environment. Python 3.9 is not supported because the required
+`python-flint==0.9.0` wheels are unavailable for that interpreter.
+
 ## Current Goal
 
 Support a small OpenQASM subset:
@@ -35,12 +57,17 @@ Support a small OpenQASM subset:
 Rotation gates support symbolic and exact angles such as `theta`, `-theta`,
 `pi`, `pi/2`, `0.5*pi`, and `2*pi`.
 
-## Usage
+## Single-Circuit Block-Encoding Verification
 
-Print only the final symbolic branches:
+Use the paper-style proportionality check for a single block-encoding circuit.
+Pass the unnormalized target Hamiltonian `H` to `--expected`; the verifier
+infers the real positive subnormalization factor `alpha` and checks the
+coefficient residual against `epsilon / 2^(n/2)`:
 
 ```bash
-.venv/bin/python -m symbolic.verify examples/lcu_x_minus_z.qasm --expected "(X - Z)/2"
+.venv/bin/python -m symbolic.verify examples/lcu_x_minus_z.qasm \
+  --expected "X - Z" \
+  --block-encoding-epsilon 1e-8
 ```
 
 ## RQ1 Block-Encoding Evaluation
@@ -67,10 +94,9 @@ Run the symbolic block-encoding evaluation:
 The block-encoding evaluation uses the paper's final proportionality check by
 default: it treats the manifest Hamiltonian as `H`, infers the real positive
 subnormalization factor `alpha`, and checks the coefficient residual with
-`epsilon = 1e-8` against the paper threshold `epsilon / 2^(n/2)`. The optional
-`--block-encoding-residual-tolerance` floor defaults to `0`; pass
-`--check-mode exact` only to reproduce the older normalized top-left-block
-comparison.
+`epsilon = 1e-8` against the paper threshold `epsilon / 2^(n/2)`. This is the
+only approximate acceptance threshold. Pass `--check-mode exact` only to
+reproduce the older normalized top-left-block comparison.
 
 Results are written to `evaluation/results/block_encoding_results.csv`. For a
 quick smoke suite, pass a smaller size list such as:
@@ -87,7 +113,8 @@ shells such as zsh, or pass plain integers.
 .venv/bin/python -m symbolic.verify examples/two_ancilla_hh.qasm \
   --ancillas 'q[0]' 'q[1]' \
   --systems 'q[2]' \
-  --expected "I/2" \
+  --expected "I" \
+  --block-encoding-epsilon 1e-8 \
   --trace
 ```
 
@@ -107,21 +134,28 @@ and `q[3] -> system[1]`, so `X_0 Z_1` means `X` on `q[2]` and `Z` on `q[3]`.
 ```bash
 .venv/bin/python -m symbolic.verify examples/lcu_xx_plus_zz.qasm \
   --systems 1 2 \
-  --expected "(X0 X1 + Z0 Z1)/2"
+  --expected "X0 X1 + Z0 Z1" \
+  --block-encoding-epsilon 1e-8
 ```
 
-Rotation-gate example with a symbolic angle:
+The legacy exact-mode symbolic-angle command is retained below only as a
+commented reference. It checks the normalized top-left block directly and is
+not part of the paper-style RQ1 evaluation:
 
 ```bash
-.venv/bin/python -m symbolic.verify examples/rz_ancilla_theta_sandwich.qasm \
-  --expected "cos(theta/2) I" \
-  --trace
+# Legacy exact-mode command (not the paper RQ1 check):
+# .venv/bin/python -m symbolic.verify examples/rz_ancilla_theta_sandwich.qasm \
+#   --expected "cos(theta/2) I" \
+#   --trace
 ```
 
 Print every intermediate update:
 
 ```bash
-.venv/bin/python -m symbolic.verify examples/lcu_x_minus_z.qasm --expected "(X - Z)/2" --trace
+.venv/bin/python -m symbolic.verify examples/lcu_x_minus_z.qasm \
+  --expected "X - Z" \
+  --block-encoding-epsilon 1e-8 \
+  --trace
 ```
 
 For multi-ancilla circuits, trace output is sparse and branch-oriented:
@@ -138,16 +172,20 @@ The verifier starts from
 
 $$B_{00\cdots0} = I$$
 
-and verifies the final all-zero branch against the expected top-left block.
+In the paper-style block-encoding route, it treats `--expected` as the target
+Hamiltonian `H` and verifies the final all-zero branch with the proportionality
+and residual-threshold check described above. Direct comparison against an
+expected normalized top-left block belongs only to the legacy exact mode.
 
 Verification results:
 
 - `PASS`: with `--block-encoding-epsilon`, the final all-zero branch is
   proportional to the target Hamiltonian within the requested tolerance, using
   the inferred real positive subnormalization factor `alpha`.
-- `PASS_EXACT`: final all-zero branch exactly equals the expected operator in
-  exact comparison mode.
-- `PASS_UP_TO_SCALE`: final all-zero branch is `scale * expected` for a scalar `scale`.
+- `PASS_EXACT`: in the legacy exact mode, the final all-zero branch exactly
+  equals the expected normalized operator.
+- `PASS_UP_TO_SCALE`: in the legacy exact mode, the final all-zero branch is
+  `scale * expected` for a scalar `scale`.
 - `FAIL`: final all-zero branch is neither exactly equal nor equal up to a scalar.
 
 Numeric coefficient comparisons use a default absolute tolerance of `1e-8`.
@@ -173,7 +211,7 @@ The command-line verifier supports three separate routes:
   `--expected`. With `--block-encoding-epsilon`, treat `--expected` as the
   target Hamiltonian `H`, infer the real positive `alpha` minimizing
   `||alpha*B - H||`, and accept when the coefficient residual is at most
-  `max(epsilon / 2^(n/2), residual_tolerance)`.
+  `epsilon / 2^(n/2)`.
 - Hamiltonian simulation: compute the final symbolic polynomial and check it
   directly against `scale * exp(-i*x*tau)` on `[-1, 1]` with `--hamsim-tau`,
   `--hamsim-epsilon`, and `--hamsim-scale`.
@@ -191,6 +229,14 @@ q[1..m]    = block-encoding ancillas of U_H
 q[m+1]     = selector / realification ancilla
 q[m+2..]   = system qubits
 ```
+
+QSP word mode accepts QASM in the QSP canonical form used by the paper. Every
+`UH`, `UHdg`, `cUH`, and `cUHdg` invocation must use the same block-ancilla and
+system registers. With two or more block ancillas, a phase conditioned on the
+all-zero block state must use the complete open-control sandwich: apply `x` to
+every block ancilla, use all of them as controls, and restore every `x` in
+reverse order. The verifier rejects direct gates that distinguish individual
+nonzero block states and controls that cover only part of the block register.
 
 The QASM files still keep pyqsp phases separate from physical OpenQASM rotation
 angles. They first convert pyqsp's Wx phases to QSVT projector phases, then
@@ -259,9 +305,9 @@ does not require a real block encoding with `H^* = H`.
 ## Hamiltonian Simulation Verification
 
 QSP generation lives in `symbolic.qsp`; `tools/hamsim_qsp.py` is a command-line
-wrapper around that module. Synthesis needs pyqsp's scientific Python
-dependencies (`numpy`, `scipy`, `matplotlib`), so run it with an environment
-that has pyqsp available, not the minimal verifier `.venv`.
+wrapper around that module. Its pyqsp scientific Python dependencies (`numpy`,
+`scipy`, and `matplotlib`) are included in the reproducible `.venv` setup
+above.
 
 Generate a full Hamiltonian-simulation QASM file and metadata:
 
@@ -414,8 +460,11 @@ cUHdg q[selector], q[block_0], q[block_1], ..., q[system_0], ...;
 ```
 
 In word mode, the verifier tracks the all-zero block subspace and abstracts the
-orthogonal block-ancilla subspace as one complement. The same implementation is
-used for every `m >= 1`.
+orthogonal block-ancilla subspace as one complement. This abstraction is sound
+for the canonical form above because the circuit never distinguishes states
+inside that complement. The verifier checks this restriction before symbolic
+execution when `m >= 2`. For `m = 1`, the complement contains only the single
+state `|1>`, so ordinary branch operations remain exact.
 
 Run the abstract QSP regressions with:
 

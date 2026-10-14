@@ -170,7 +170,6 @@ def _run_block_cases(cases: list[BugCase]) -> list[dict[str, str]]:
                 profile_dir=None,
                 check_mode="paper",
                 block_encoding_epsilon=epsilon,
-                block_encoding_residual_tolerance=0.0,
             )
             result["bug_detection_result"] = _block_bug_detection_result(case, result)
             rows.append(result)

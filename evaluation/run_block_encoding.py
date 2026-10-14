@@ -28,19 +28,11 @@ from symbolic.verify import (  # noqa: E402
 )
 
 
-DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE = 0.0
-
-
 def main() -> int:
     args = _parse_args()
     if args.check_mode == "paper" and args.block_encoding_epsilon <= 0:
         raise SystemExit("--block-encoding-epsilon must be positive")
-    if args.check_mode == "paper" and args.block_encoding_residual_tolerance < 0:
-        raise SystemExit("--block-encoding-residual-tolerance must be nonnegative")
     block_encoding_epsilon = args.block_encoding_epsilon if args.check_mode == "paper" else None
-    block_encoding_residual_tolerance = (
-        args.block_encoding_residual_tolerance if args.check_mode == "paper" else None
-    )
     manifest_path = args.manifest
     if not manifest_path.exists():
         raise SystemExit(f"Missing {manifest_path.relative_to(ROOT)}. Run evaluation/generate_benchmarks.py first.")
@@ -61,7 +53,6 @@ def main() -> int:
                     row,
                     check_mode=args.check_mode,
                     block_encoding_epsilon=block_encoding_epsilon,
-                    block_encoding_residual_tolerance=block_encoding_residual_tolerance,
                 )
             else:
                 result = _run_benchmark(
@@ -70,7 +61,6 @@ def main() -> int:
                     profile_dir=args.profile_dir,
                     check_mode=args.check_mode,
                     block_encoding_epsilon=block_encoding_epsilon,
-                    block_encoding_residual_tolerance=block_encoding_residual_tolerance,
                 )
                 if result["status"] == "TIMEOUT":
                     timeout_models.add(row["model"])
@@ -115,16 +105,6 @@ def _parse_args() -> argparse.Namespace:
             f"is multiplied by alpha to recover the target H. Default: {DEFAULT_BLOCK_ENCODING_EPSILON:g}."
         ),
     )
-    parser.add_argument(
-        "--block-encoding-residual-tolerance",
-        type=float,
-        default=DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE,
-        help=(
-            "Optional numerical floor for paper-mode coefficient residual checks. "
-            "The default 0 follows the paper threshold exactly. "
-            f"Default: {DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE:g}."
-        ),
-    )
     return parser.parse_args()
 
 
@@ -140,7 +120,6 @@ def _run_benchmark(
     profile_dir: Path | None,
     check_mode: str,
     block_encoding_epsilon: float | None,
-    block_encoding_residual_tolerance: float | None,
 ) -> dict[str, str]:
     if timeout_sec <= 0:
         return _run_benchmark_inner(
@@ -148,13 +127,12 @@ def _run_benchmark(
             profile_dir=profile_dir,
             check_mode=check_mode,
             block_encoding_epsilon=block_encoding_epsilon,
-            block_encoding_residual_tolerance=block_encoding_residual_tolerance,
         )
 
     queue: mp.Queue = mp.Queue(maxsize=1)
     process = mp.Process(
         target=_worker,
-        args=(row, queue, profile_dir, check_mode, block_encoding_epsilon, block_encoding_residual_tolerance),
+        args=(row, queue, profile_dir, check_mode, block_encoding_epsilon),
     )
     started = time.perf_counter()
     process.start()
@@ -165,7 +143,7 @@ def _run_benchmark(
         process.join()
         return {
             **_metadata(row),
-            **_check_metadata(check_mode, block_encoding_epsilon, block_encoding_residual_tolerance, None),
+            **_check_metadata(check_mode, block_encoding_epsilon, None),
             "runtime_sec": f"{time.perf_counter() - started:.9f}",
             "tracemalloc_peak_mb": "",
             "process_maxrss_mb": "",
@@ -179,7 +157,7 @@ def _run_benchmark(
 
     return {
         **_metadata(row),
-        **_check_metadata(check_mode, block_encoding_epsilon, block_encoding_residual_tolerance, None),
+        **_check_metadata(check_mode, block_encoding_epsilon, None),
         "runtime_sec": f"{time.perf_counter() - started:.9f}",
         "tracemalloc_peak_mb": "",
         "process_maxrss_mb": "",
@@ -195,7 +173,6 @@ def _worker(
     profile_dir: Path | None,
     check_mode: str,
     block_encoding_epsilon: float | None,
-    block_encoding_residual_tolerance: float | None,
 ) -> None:
     queue.put(
         _run_benchmark_inner(
@@ -203,7 +180,6 @@ def _worker(
             profile_dir=profile_dir,
             check_mode=check_mode,
             block_encoding_epsilon=block_encoding_epsilon,
-            block_encoding_residual_tolerance=block_encoding_residual_tolerance,
         )
     )
 
@@ -214,7 +190,6 @@ def _run_benchmark_inner(
     profile_dir: Path | None,
     check_mode: str,
     block_encoding_epsilon: float | None,
-    block_encoding_residual_tolerance: float | None,
 ) -> dict[str, str]:
     error = ""
     status = "ERROR"
@@ -238,11 +213,6 @@ def _run_benchmark_inner(
             keep_trace=False,
             profile_gates=profile_dir is not None,
             block_encoding_epsilon=block_encoding_epsilon,
-            block_encoding_residual_tolerance=(
-                block_encoding_residual_tolerance
-                if block_encoding_residual_tolerance is not None
-                else DEFAULT_BLOCK_ENCODING_RESIDUAL_TOLERANCE
-            ),
         )
         if profile_dir is not None:
             _write_gate_profile(row, result, profile_dir)
@@ -259,7 +229,6 @@ def _run_benchmark_inner(
         **_check_metadata(
             check_mode,
             block_encoding_epsilon,
-            block_encoding_residual_tolerance,
             result.block_encoding_check if "result" in locals() else None,
         ),
         "runtime_sec": f"{runtime_sec:.9f}",
@@ -305,11 +274,10 @@ def _skipped_after_timeout(
     *,
     check_mode: str,
     block_encoding_epsilon: float | None,
-    block_encoding_residual_tolerance: float | None,
 ) -> dict[str, str]:
     return {
         **_metadata(row),
-        **_check_metadata(check_mode, block_encoding_epsilon, block_encoding_residual_tolerance, None),
+        **_check_metadata(check_mode, block_encoding_epsilon, None),
         "runtime_sec": "",
         "tracemalloc_peak_mb": "",
         "process_maxrss_mb": "",
@@ -339,8 +307,6 @@ def _fieldnames() -> list[str]:
         "inferred_alpha",
         "residual_norm",
         "residual_threshold",
-        "residual_numerical_tolerance",
-        "residual_acceptance_threshold",
         "runtime_sec",
         "tracemalloc_peak_mb",
         "process_maxrss_mb",
@@ -353,7 +319,6 @@ def _fieldnames() -> list[str]:
 def _check_metadata(
     check_mode: str,
     block_encoding_epsilon: float | None,
-    block_encoding_residual_tolerance: float | None,
     check,
 ) -> dict[str, str]:
     if check_mode != "paper":
@@ -363,8 +328,6 @@ def _check_metadata(
             "inferred_alpha": "",
             "residual_norm": "",
             "residual_threshold": "",
-            "residual_numerical_tolerance": "",
-            "residual_acceptance_threshold": "",
         }
     if check is None:
         return {
@@ -373,8 +336,6 @@ def _check_metadata(
             "inferred_alpha": "",
             "residual_norm": "",
             "residual_threshold": "",
-            "residual_numerical_tolerance": f"{block_encoding_residual_tolerance:.12g}",
-            "residual_acceptance_threshold": "",
         }
     return {
         "check_mode": check_mode,
@@ -382,8 +343,6 @@ def _check_metadata(
         "inferred_alpha": f"{check.alpha:.12g}",
         "residual_norm": f"{check.residual_norm:.12g}",
         "residual_threshold": f"{check.threshold:.12g}",
-        "residual_numerical_tolerance": f"{check.numerical_tolerance:.12g}",
-        "residual_acceptance_threshold": f"{check.acceptance_threshold:.12g}",
     }
 
 

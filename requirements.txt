@@ -1,4 +1,17 @@
-mpmath
-python-flint>=0.9.0
-sympy
-pytest
+# Complete tested environment for CPython 3.11.
+# Install with: python3.11 -m pip install -r requirements.txt
+# These are the latest stable releases compatible with Python 3.11 as of 2026-10-14.
+
+# Core symbolic verifier and rigorous Arb/Acb interval arithmetic
+mpmath==1.3.0
+python-flint==0.9.0
+sympy==1.14.0
+
+# QSP synthesis and Hamiltonian-simulation benchmark generation
+numpy==2.4.6
+scipy==1.17.1
+matplotlib==3.11.2
+pyqsp==0.2.0
+
+# Verification test suite
+pytest==9.1.1
