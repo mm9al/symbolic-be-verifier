@@ -1,0 +1,33 @@
+{
+  "core_rq1_rq2_generator_sources_unchanged": {
+    "symbolic/__init__.py": "cb7441621bf00101937dd765be8f0cfca80a7d44bbf4bb32bf737c09b59a961f",
+    "symbolic/branch_state.py": "8f3037fe62f1508e5ae37abaf600cc8ffa4d2b3700b7748387207445b32e5568",
+    "symbolic/expr.py": "a5f4e2dd8d404380cb151c5eb839d6cf29cc97193f04408a40980221fbb1c396",
+    "symbolic/interval.py": "df3b01dcd958f076804bddce6a24b55f3979fc0fdfafaf486a53494496aa2fd4",
+    "symbolic/profile.py": "118cf960cb93847edd63c91bf53acf5c96f5868120722015a062a52c5dcc81c9",
+    "symbolic/qasm_parser.py": "0048f8c8bb80788e2f8760b1620fb131dc59898da27b6ff50f036e0f1438a735",
+    "symbolic/qsp.py": "42a862c669225d44ad2458226070bbfc376bc6357eeaac1d9b53bb41e2a4b7ac",
+    "symbolic/scalar.py": "b5bf397d475f0f065f512da97f7b285f30e3a8e52878f16de66d5113c5b6e3c8",
+    "symbolic/verify.py": "e0a9b815d72556823ec529499974148f96a0dadffac06de43a5291956d3e196a",
+    "symbolic/word_expr.py": "e84f06ff2b4d5d5193e5654e944966b60e61f406c3269eb0bf1d1e94c50372d2",
+    "evaluation/run_block_encoding.py": "09af86b7297e6d88b03721121626fd31f7d4faac52976d3ad086b9044e7a8daa",
+    "evaluation/run_hamsim.py": "ca7f262ae5c338215f03627ce8237b0879909528a0d4d50f69f989b8c7f8f2c6",
+    "tools/benchmarks.py": "6196230f22218f3acced8775a19a0b4873d7fd1b3d4df24f9f1991acb1fb0026"
+  },
+  "original_inputs_unchanged": true,
+  "all_comparison_coefficient_enclosures_compatible": true,
+  "acceptance_settings_identical": true,
+  "matched_sizes": [
+    2,
+    3,
+    4
+  ],
+  "timing_scope": "One sequential run per mode, each case in a fresh worker, same precision/epsilon/delta and tracemalloc; no generation time, warmups or repetitions",
+  "equivalence_basis": "Exact all-8-column certificates for matched parameter-free templates, including absolute phase; enclosure agreement is a regression check",
+  "tests": {
+    "local_summaries_passed": 23,
+    "existing_runners_and_pennylane_passed": 18,
+    "skipped": 2,
+    "skip_reason": "PennyLane generation environment is separate; generator sources were not modified"
+  }
+}

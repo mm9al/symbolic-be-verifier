@@ -1,0 +1,55 @@
+{
+  "generator": "evaluation/pennylane/refresh_comparisons.py",
+  "reran_circuits": false,
+  "timing_scope": "Saved per-case runtime_sec; one run per mode, no repetitions; baseline and optimized runs are separate batches",
+  "matched_sizes": {
+    "local_summaries": [
+      2,
+      3,
+      4
+    ],
+    "bounded_pruning": [
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ]
+  },
+  "csv_json_summaries_match": true,
+  "paired_inputs_and_settings_match": true,
+  "paired_coefficient_enclosures_compatible": true,
+  "coefficient_check_scope": "Regression compatibility of serialized coefficient balls with eta; not a new equivalence proof",
+  "source_snapshot_hashes_match_measurement_metadata": {
+    "evaluation/pennylane/run_block_encoding.py": true,
+    "evaluation/pennylane/bounded_pruning.py": true
+  },
+  "input_artifacts_sha256": {
+    "results_local_summaries/baseline/block_encoding_results.csv": "b4e74e73c7665eae1905bc9bbe20afb82d51ae55f76542936153e84105156562",
+    "results_local_summaries/baseline/run_metadata.json": "d5c1f3f8d20c0a167251d7e6740cab7288dbc04a267bcde0b1824f3e140b3b41",
+    "results_local_summaries/baseline/cases/ising_periodic_n2.json": "d82adb07361b933618ec2fda2b49f3f37a0e5ac2cb1187114e3f1bfed0566418",
+    "results_local_summaries/baseline/cases/ising_periodic_n3.json": "3af413d9c649ac35adb32e7618e74abff3ec88714cb68605358dbb59c7cafb25",
+    "results_local_summaries/baseline/cases/ising_periodic_n4.json": "dcfd5dcddbd38b1a1d7e04e153e5424e4a3d55c6b3c85f43fd820cb643dcef02",
+    "results_local_summaries/block_encoding_results.csv": "793e036b407f0e69aaef1c093b19569f96355d73802dbc0d6ee826f0e6b5f3cb",
+    "results_local_summaries/run_metadata.json": "708a519925021dc1ecb31ab84efc2608ecc7b5f12be4b71666433dcd3475d5c2",
+    "results_local_summaries/cases/ising_periodic_n2.json": "44cf55d1a6533d4ce60ab680845d86b6576b963dc0557b494bd84b1fac1ff2f1",
+    "results_local_summaries/cases/ising_periodic_n3.json": "1079945cb6dd2e901822f9261aac253165a1b89a839a1407242d4cfb0d38dd80",
+    "results_local_summaries/cases/ising_periodic_n4.json": "5adf071535d7078b1098643d5597bf22a179b7456a14b404877483e013ba3e8c",
+    "results_local_summaries/cases/ising_periodic_n5.json": "1deaa4fa233b78809784661aeb9538ea462c2eb0a5d4075dae6d15a7d62e6a6d",
+    "results_local_summaries/cases/ising_periodic_n6.json": "3bbafc9fcc5a321a4f6f9a500074e35401eaf91717956ee9add5f3fd995b709f",
+    "results_local_summaries/cases/ising_periodic_n7.json": "7420ee442b91c133b19c3307a8061d7069fa9e3e527965fb4170cb2db7e44d23",
+    "results_bounded_pruning/block_encoding_results.csv": "ae5e37dc76bedd9e5c3e7291e5253d325add0d15689e326c723cc283e116ff67",
+    "results_bounded_pruning/run_metadata.json": "6de0083f983791f0323474f8fbf1bc9f02a60a571a70ed5558ec902f1c002bff",
+    "results_bounded_pruning/cases/ising_periodic_n2.json": "6f598c1b811ec8854259a490ccf8be6bc92f63670737f8a548afde7cf09bfa1e",
+    "results_bounded_pruning/cases/ising_periodic_n3.json": "0c422a7e27265d5dafcc8a7585522da3bb8e1c19cfc156565a94f0c324b8a55f",
+    "results_bounded_pruning/cases/ising_periodic_n4.json": "44e9181712e4ab1d06c76764192a9ee4aa17952097d44d76c80cac08206873c1",
+    "results_bounded_pruning/cases/ising_periodic_n5.json": "c03c41404dee953717c825e32622cd8ea27909a0b74cc79f01998f5e00f28092",
+    "results_bounded_pruning/cases/ising_periodic_n6.json": "03f10072066774454d06c5b47900f7c2bd9af7a8accc9d84c124eb16ad21bbbf",
+    "results_bounded_pruning/cases/ising_periodic_n7.json": "1e09adf65c5733a24d8dbb29a46efc5cfef19819d1363f968a32d5713f2362ff",
+    "results_bounded_pruning/cases/ising_periodic_n8.json": "4c39801b4f1968d64435d2212a7285bd38937efc52496af79d8a058b6ddfb633",
+    "results_bounded_pruning/cases/ising_periodic_n9.json": "c300b564284530d6b3dbe67d3b6e0cd1da78333ffebf63dbe80dd7054a959be6",
+    "results_bounded_pruning/cases/ising_periodic_n10.json": "ec6464742e275a0b0ff1ab0a81d06a8ec57ab99a08e5a709ac017f8247011085",
+    "results_bounded_pruning/cases/ising_periodic_n16.json": "00f8fd97ea61a0da79ce9afacd918414f03661ce90e8de47138e19dca513f15a"
+  }
+}

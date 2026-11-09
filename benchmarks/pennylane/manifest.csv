@@ -1,0 +1,6 @@
+benchmark_id,model,graph,n_system,n_terms,target_lcu_terms,n_ancilla,nominal_alpha,gate_count,qasm_path,metadata_path,metadata_sha256
+ising_periodic_n17,ising,periodic,17,34,34,6,34,21150,ising/ising_periodic_n17/block_encoding.qasm,ising/ising_periodic_n17/metadata.json,ca11b88efec7f36c24fcf288a59205c44021b739ab5a47f20db092ec3cd17159
+ising_periodic_n32,ising,periodic,32,64,64,6,64,73544,ising/ising_periodic_n32/block_encoding.qasm,ising/ising_periodic_n32/metadata.json,023dbb21e2e07dba51ce9321b68a8d4677baf438ec3f32778be3e08f2b54805d
+ising_periodic_n33,ising,periodic,33,66,66,7,66,75770,ising/ising_periodic_n33/block_encoding.qasm,ising/ising_periodic_n33/metadata.json,5e8f34977c1d5eaaf5c6c73d6e83af9d4c8894f612cd05dd0ff7ee62fb22dbf3
+ising_periodic_n64,ising,periodic,64,128,128,7,128,239626,ising/ising_periodic_n64/block_encoding.qasm,ising/ising_periodic_n64/metadata.json,a3b5a199d766a6e6ffd92ce3d35f2ab02b8b6b4824cde69d4b11d2f09d84c478
+ising_periodic_n65,ising,periodic,65,130,130,8,130,242874,ising/ising_periodic_n65/block_encoding.qasm,ising/ising_periodic_n65/metadata.json,9b882aca160366ad8811209d0d02ff233849290f0b99d8471a731358833e3f0b

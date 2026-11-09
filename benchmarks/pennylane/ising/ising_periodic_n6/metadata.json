@@ -1,0 +1,166 @@
+{
+  "benchmark_id": "ising_periodic_n6",
+  "model": "ising",
+  "graph": "periodic",
+  "n_system": 6,
+  "target_lcu_terms": 12,
+  "n_terms": 12,
+  "n_ancilla": 4,
+  "ancillas": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "systems": [
+    4,
+    5,
+    6,
+    7,
+    8,
+    9
+  ],
+  "target_H": "Z_0 Z_1 + Z_1 Z_2 + Z_2 Z_3 + Z_3 Z_4 + Z_4 Z_5 + Z_5 Z_0 + X_0 + X_1 + X_2 + X_3 + X_4 + X_5",
+  "independent_terms": [
+    {
+      "coefficient": "1",
+      "paulis": {
+        "0": "Z",
+        "1": "Z"
+      }
+    },
+    {
+      "coefficient": "1",
+      "paulis": {
+        "1": "Z",
+        "2": "Z"
+      }
+    },
+    {
+      "coefficient": "1",
+      "paulis": {
+        "2": "Z",
+        "3": "Z"
+      }
+    },
+    {
+      "coefficient": "1",
+      "paulis": {
+        "3": "Z",
+        "4": "Z"
+      }
+    },
+    {
+      "coefficient": "1",
+      "paulis": {
+        "4": "Z",
+        "5": "Z"
+      }
+    },
+    {
+      "coefficient": "1",
+      "paulis": {
+        "5": "Z",
+        "0": "Z"
+      }
+    },
+    {
+      "coefficient": "1",
+      "paulis": {
+        "0": "X"
+      }
+    },
+    {
+      "coefficient": "1",
+      "paulis": {
+        "1": "X"
+      }
+    },
+    {
+      "coefficient": "1",
+      "paulis": {
+        "2": "X"
+      }
+    },
+    {
+      "coefficient": "1",
+      "paulis": {
+        "3": "X"
+      }
+    },
+    {
+      "coefficient": "1",
+      "paulis": {
+        "4": "X"
+      }
+    },
+    {
+      "coefficient": "1",
+      "paulis": {
+        "5": "X"
+      }
+    }
+  ],
+  "nominal_alpha": "12",
+  "source_coefficients": [
+    "1",
+    "1",
+    "1",
+    "1",
+    "1",
+    "1",
+    "1",
+    "1",
+    "1",
+    "1",
+    "1",
+    "1"
+  ],
+  "source_operators": [
+    "Z(4) @ Z(5)",
+    "Z(5) @ Z(6)",
+    "Z(6) @ Z(7)",
+    "Z(7) @ Z(8)",
+    "Z(8) @ Z(9)",
+    "Z(9) @ Z(4)",
+    "X(4)",
+    "X(5)",
+    "X(6)",
+    "X(7)",
+    "X(8)",
+    "X(9)"
+  ],
+  "gate_count": 2182,
+  "gate_counts": {
+    "ry": 258,
+    "cx": 692,
+    "x": 40,
+    "h": 152,
+    "tdg": 228,
+    "t": 304,
+    "rz": 508
+  },
+  "global_phase_gamma": "-137444678594553449/50000000000000000",
+  "decimal_angle_digits": 17,
+  "added_workspace_wires": 0,
+  "select_reconstructed": false,
+  "pi_snapping": false,
+  "numerical_crosscheck": {
+    "status": "NOT_RUN",
+    "reason": "More than 8 total qubits"
+  },
+  "generation_sec": 0.19840304099489003,
+  "python": "3.12.9",
+  "packages": {
+    "pennylane": "0.45.1",
+    "numpy": "2.5.4"
+  },
+  "generator_sources_sha256": {
+    "common.py": "c0d416ebe8c7662f6e045b807f4b004b4c554c01c87dd93cf4ab15a065b6a821",
+    "generate_benchmarks.py": "fdba451f9f7ec1121178de1e5aae99118112caddd992327134feb1d8d0acee18"
+  },
+  "files_sha256": {
+    "block_encoding.qasm": "29883d37af57c366de48809b11e2e212324537410cd571a5916f2a064560ce46",
+    "structure.json": "a832828d2be6e01f293cb95cedd802c4b3f84f6d1da65f3b68e53c3cdb98ad70"
+  }
+}

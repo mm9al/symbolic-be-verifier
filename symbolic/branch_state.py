@@ -213,6 +213,24 @@ class BranchState:
                 raise UnsupportedGateError("system-system cz is not supported in v0.4")
             raise UnsupportedGateError("cz must act on known ancilla/system qubits")
 
+        if name == "cy":
+            if left == right:
+                raise UnsupportedGateError("cy requires distinct control and target qubits")
+            if left_ancilla is not None and right_system is not None:
+                gate_op = pauli("Y", index=right_system, num_qubits=self.num_system_qubits)
+                return self._apply_controlled_pauli_ancilla_to_system(left_ancilla, gate_op)
+            if left_ancilla is not None and right_ancilla is not None:
+                return self._apply_cy_ancilla_to_ancilla(left_ancilla, right_ancilla)
+            if left_system is not None and right_ancilla is not None:
+                return self._apply_cy_system_to_ancilla(left_system, right_ancilla)
+            if left_system is not None and right_system is not None:
+                z_op = pauli("Z", index=left_system, num_qubits=self.num_system_qubits)
+                p0 = (identity(self.num_system_qubits) + z_op).scale(sp.Rational(1, 2))
+                p1 = (identity(self.num_system_qubits) - z_op).scale(sp.Rational(1, 2))
+                y_op = pauli("Y", index=right_system, num_qubits=self.num_system_qubits)
+                return self._apply_system_operator(p0 + p1 * y_op)
+            raise UnsupportedGateError("cy must act on known ancilla/system qubits")
+
         raise UnsupportedGateError(f"Unsupported two-qubit gate: {name}")
 
     def _apply_block_encoding_gate(
@@ -341,6 +359,30 @@ class BranchState:
             _add_branch(new, new_key, branch, self.num_system_qubits)
         return self._replace(new)
 
+    def _apply_cy_ancilla_to_ancilla(self, control_index: int, target_index: int) -> "BranchState":
+        new: Dict[BranchKey, BranchValue] = {}
+        for key, branch in self.branches.items():
+            if key[control_index] == 0:
+                _add_branch(new, key, branch, self.num_system_qubits)
+            else:
+                # Y|0> = i|1>, Y|1> = -i|0>.
+                phase = sp.I if key[target_index] == 0 else -sp.I
+                _add_branch(new, _flip_bit(key, target_index), branch.scale(phase), self.num_system_qubits)
+        return self._replace(new)
+
+    def _apply_cy_system_to_ancilla(self, system_index: int, target_ancilla_index: int) -> "BranchState":
+        if self.expression_kind == "word":
+            raise UnsupportedGateError("System-controlled cy is not supported in QSP word mode")
+        z_op = pauli("Z", index=system_index, num_qubits=self.num_system_qubits)
+        p0 = (identity(self.num_system_qubits) + z_op).scale(sp.Rational(1, 2))
+        p1 = (identity(self.num_system_qubits) - z_op).scale(sp.Rational(1, 2))
+        new: Dict[BranchKey, BranchValue] = {}
+        for key, branch in self.branches.items():
+            _add_branch(new, key, p0 * branch, self.num_system_qubits)
+            phase = sp.I if key[target_ancilla_index] == 0 else -sp.I
+            _add_branch(new, _flip_bit(key, target_ancilla_index), (p1 * branch).scale(phase), self.num_system_qubits)
+        return self._replace(new)
+
     def _apply_mcx_ancilla_to_ancilla(self, control_indices: Tuple[int, ...], target_index: int) -> "BranchState":
         new: Dict[BranchKey, BranchValue] = {}
         for key, branch in self.branches.items():
@@ -442,6 +484,8 @@ def _ancilla_gate_matrix(name: str, theta: Optional[sp.Expr]) -> Tuple[Tuple[sp.
         return ((1, 0), (0, sp.I))
     if name == "sdg":
         return ((1, 0), (0, -sp.I))
+    if name in {"t", "tdg"}:
+        return ((1, 0), (0, _t_phase(dagger=name == "tdg")))
     if name == "h":
         inv_sqrt2 = sp.sqrt(2) / 2
         return ((inv_sqrt2, inv_sqrt2), (inv_sqrt2, -inv_sqrt2))
@@ -467,6 +511,13 @@ def _system_gate_operator(name: str, theta: Optional[sp.Expr], *, system_index: 
         return _s_operator(system_index=system_index, num_system_qubits=num_system_qubits)
     if name == "sdg":
         return _sdg_operator(system_index=system_index, num_system_qubits=num_system_qubits)
+    if name in {"t", "tdg"}:
+        # diag(1, phase) = (1 + phase) I/2 + (1 - phase) Z/2.
+        phase = _t_phase(dagger=name == "tdg")
+        return (
+            identity(num_system_qubits).scale((1 + phase) / 2)
+            + pauli("Z", index=system_index, num_qubits=num_system_qubits).scale((1 - phase) / 2)
+        )
     if name == "h":
         return (
             pauli("X", index=system_index, num_qubits=num_system_qubits)
@@ -496,6 +547,11 @@ def _s_operator(*, system_index: int, num_system_qubits: int) -> OpExpr:
     identity_op = identity(num_system_qubits)
     z_op = pauli("Z", index=system_index, num_qubits=num_system_qubits)
     return identity_op.scale((1 + sp.I) / 2) + z_op.scale((1 - sp.I) / 2)
+
+
+def _t_phase(*, dagger: bool) -> sp.Expr:
+    """Exact exp(+-i*pi/4), including the phase omitted by a bare RZ."""
+    return (1 - sp.I if dagger else 1 + sp.I) * sp.sqrt(2) / 2
 
 
 def _sdg_operator(*, system_index: int, num_system_qubits: int) -> OpExpr:

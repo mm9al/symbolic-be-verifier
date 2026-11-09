@@ -1,0 +1,97 @@
+{
+  "unitary_operand_validation": {
+    "2": {
+      "status": "PASS_VALID_UNITARY_OPERANDS",
+      "source_gates": 53,
+      "executed_steps": 20
+    },
+    "3": {
+      "status": "PASS_VALID_UNITARY_OPERANDS",
+      "source_gates": 427,
+      "executed_steps": 177
+    },
+    "4": {
+      "status": "PASS_VALID_UNITARY_OPERANDS",
+      "source_gates": 978,
+      "executed_steps": 482
+    },
+    "5": {
+      "status": "PASS_VALID_UNITARY_OPERANDS",
+      "source_gates": 1462,
+      "executed_steps": 592
+    },
+    "6": {
+      "status": "PASS_VALID_UNITARY_OPERANDS",
+      "source_gates": 2182,
+      "executed_steps": 846
+    },
+    "7": {
+      "status": "PASS_VALID_UNITARY_OPERANDS",
+      "source_gates": 3106,
+      "executed_steps": 1182
+    },
+    "8": {
+      "status": "PASS_VALID_UNITARY_OPERANDS",
+      "source_gates": 4660,
+      "executed_steps": 1812
+    },
+    "9": {
+      "status": "PASS_VALID_UNITARY_OPERANDS",
+      "source_gates": 5546,
+      "executed_steps": 1924
+    },
+    "10": {
+      "status": "PASS_VALID_UNITARY_OPERANDS",
+      "source_gates": 6634,
+      "executed_steps": 2146
+    },
+    "16": {
+      "status": "PASS_VALID_UNITARY_OPERANDS",
+      "source_gates": 19654,
+      "executed_steps": 4870
+    }
+  },
+  "protected_sources_unchanged": {
+    "symbolic/__init__.py": true,
+    "symbolic/branch_state.py": true,
+    "symbolic/expr.py": true,
+    "symbolic/interval.py": true,
+    "symbolic/profile.py": true,
+    "symbolic/qasm_parser.py": true,
+    "symbolic/qsp.py": true,
+    "symbolic/scalar.py": true,
+    "symbolic/verify.py": true,
+    "symbolic/word_expr.py": true,
+    "evaluation/run_block_encoding.py": true,
+    "evaluation/run_hamsim.py": true,
+    "tools/benchmarks.py": true
+  },
+  "source_snapshot_scope": "The two saved mode sources match the hashes of this directory's recorded measurement run",
+  "current_pruning_source_sha256": "9163b21712e9a37f8d6ac576ed6bf519d58fcab96102cc70fd44a36f59c1e2d7",
+  "measured_cases": 10,
+  "measured_status_counts": {
+    "ACCEPT": 10
+  },
+  "related_regression_tests": {
+    "before_operand_guards": {
+      "passed": 60,
+      "skipped": 2
+    },
+    "pruning_suite_after_operand_guards": {
+      "passed": 25
+    }
+  },
+  "experiment_parameters": {
+    "precision": 100,
+    "epsilon_BE": "1e-8",
+    "hermiticity_delta": "1e-12",
+    "pruning_threshold": "1e-24",
+    "pruning_budget": "1e-14"
+  },
+  "source_snapshot_hashes_match_measurement_metadata": true,
+  "source_snapshot_checks": {
+    "evaluation/pennylane/run_block_encoding.py": true,
+    "evaluation/pennylane/bounded_pruning.py": true
+  },
+  "comparison_checks": "../comparison_checks.json"
+}

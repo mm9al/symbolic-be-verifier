@@ -1,0 +1,3 @@
+# Separate generation environment; verification uses the repository environment.
+pennylane==0.45.1
+numpy==2.5.4

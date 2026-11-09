@@ -1,0 +1,264 @@
+{
+  "target_H": "Z_0 Z_1 + Z_1 Z_0 + X_0 + X_1",
+  "ancillas": [
+    0,
+    1
+  ],
+  "systems": [
+    2,
+    3
+  ],
+  "hermiticity": {
+    "status": "PASS_STRUCTURE",
+    "exact_status": "PASS_STRUCTURE",
+    "exact": {
+      "status": "PASS_STRUCTURE",
+      "proof": "Exact native P\u2020SP with Hermitian diagonal SELECT blocks",
+      "select_branches": [
+        {
+          "index": 0,
+          "operator": "Z_0 Z_1"
+        },
+        {
+          "index": 1,
+          "operator": "X_0"
+        },
+        {
+          "index": 2,
+          "operator": "X_1"
+        },
+        {
+          "index": 3,
+          "operator": "X_0 X_1"
+        }
+      ]
+    },
+    "structure": {
+      "status": "PASS_STRUCTURE",
+      "proof": "Exact native P\u2020SP with Hermitian diagonal SELECT blocks",
+      "select_branches": [
+        {
+          "index": 0,
+          "operator": "Z_0 Z_1"
+        },
+        {
+          "index": 1,
+          "operator": "X_0"
+        },
+        {
+          "index": 2,
+          "operator": "X_1"
+        },
+        {
+          "index": 3,
+          "operator": "X_0 X_1"
+        }
+      ]
+    },
+    "delta": "1e-12",
+    "within_delta": true,
+    "truncation_error_upper": "[3.094849654193475680511557322241660131289709990816735540049358532202970952726333583824617387346946248e-100 +/- 2.01e-200]",
+    "max_imaginary_coefficient_upper": "[3.094849654193475680511557322241660131289709990816735540049358532202970952726333583824617387346946248e-100 +/- 2.01e-200]",
+    "max_imaginary_coefficient_pauli": "ZZ",
+    "criterion": "Exact structure OR max_P |Im(c_tilde_P)| + eta < delta; missing coefficients bounded by eta",
+    "approximate_acceptance": false
+  },
+  "alpha_fit_ball": "[3.999999999999999734628156064732916755342224539057706583185258224016024591986866833925312930687761669 +/- 5.03e-100]",
+  "alpha_policy": "Infer alpha, choose a concrete decimal candidate, recompute the residual",
+  "acceptance_rule": "(Exact structure OR max_P |Im(c_tilde_P)|+eta < delta) AND alpha>0 AND 2^(n/2)*||alpha*c_tilde-h||_2 + alpha*eta <= epsilon_BE",
+  "actual_block_coefficients": {
+    "ZZ": "[0.5000000000000000995144414757251085378081081816850419152225612292041029843602557910244952854819168105 +/- 4.47e-101]",
+    "XI": "[0.2499999999999999637721898210077150552186293099091577631685939364033009433725441298239750678721638588 +/- 8.84e-102]",
+    "IX": "[0.2499999999999999367133687032671764069732625084058003216088448343925960722672000791515296466459193306 +/- 2.13e-101]"
+  },
+  "global_phase_gamma": "0",
+  "metadata_sha256": "af3e113d1c26c1148d6c54c9266325d18b01bf41fdc4938e5cab228cddf111df",
+  "qasm_sha256": "165320f217ae25985ae1c0baa16f9daa22157f924bc7c5c54e1a7fc84e76a82d",
+  "local_summaries": {
+    "mode": "exact_local_summaries",
+    "source_gate_count": 53,
+    "executed_steps": 20,
+    "summary_count": 2,
+    "summary_counts": {
+      "ccz": 2
+    },
+    "summarized_source_gates": 30,
+    "removed_identity_gates": 5,
+    "removed_identity_source_gate_indices": [
+      8,
+      10,
+      12,
+      45,
+      47
+    ],
+    "certificates": {
+      "pennylane_ccz": {
+        "status": "PASS_EXACT",
+        "primitive": "ccz",
+        "input_columns": 8,
+        "absolute_phase_checked": true,
+        "coefficient_domain": "Q(sqrt(2), i)",
+        "template_sha256": "78d47b5537121e9d78a38e168f7ad9e276508d829a6e050ce86fda173c245d95",
+        "method": "Exact computational-basis evaluation; no numerical tolerance"
+      }
+    },
+    "occurrences": [
+      {
+        "template": "pennylane_ccz",
+        "primitive": "ccz",
+        "qubits": [
+          0,
+          1,
+          3
+        ],
+        "source_gate_start": 13,
+        "source_gate_stop": 27,
+        "parameter_free_gates": 15
+      },
+      {
+        "template": "pennylane_ccz",
+        "primitive": "ccz",
+        "qubits": [
+          0,
+          1,
+          2
+        ],
+        "source_gate_start": 28,
+        "source_gate_stop": 42,
+        "parameter_free_gates": 15
+      }
+    ],
+    "summary_compilation_sec": 0.02102641691453755,
+    "decimal_rotations": "Retained exactly as parsed; only exact-zero rotations removed",
+    "approximation_error": "0",
+    "input_qasm_modified": false,
+    "summary_execution_sec": 0.005715499981306493,
+    "final_pauli_terms": 3
+  },
+  "bounded_pruning": {
+    "threshold": "1e-24",
+    "budget": "1e-14",
+    "operator_error_upper": "[3.094849654193475680511557322241660131289709990816735540049358532202970952726333583824617387346946248e-100 +/- 1.68e-200]",
+    "dropped_terms": 2,
+    "pruning_error_upper": "[1.638390382815787958117838802865288872698812210892028749188951510754464132282830083936169640295344065e-101 +/- 2.81e-201]",
+    "roundoff_error_upper": "[2.931010615911896884699773441955131244019828769727532665130463381127524539498050575431000423317411842e-100 +/- 3.05e-200]",
+    "recentered_coefficients": 30,
+    "skipped_recentering_batches": 0,
+    "skipped_batches": 0,
+    "events": [
+      {
+        "step": 1,
+        "kind": "recenter",
+        "recentered_coefficients": 2,
+        "batch_error_upper": "[2.072641324487222464853279069700323790702814322220036258771573376007185975558473596377517184009025728e-101 +/- 4.51e-201]",
+        "cumulative_error_upper": "[2.072641324487222464853279069700323790702814322220036258771573376007185975558473596377517184009025728e-101 +/- 4.51e-201]"
+      },
+      {
+        "step": 2,
+        "kind": "recenter",
+        "recentered_coefficients": 4,
+        "batch_error_upper": "[3.704877615407461492615918173250606470540907018230076244654571898277231269166988061610817058809839414e-101 +/- 4.94e-201]",
+        "cumulative_error_upper": "[5.777518939894683957469197242950930261243721340450112503426145274284417244725461657988334242818865143e-101 +/- 5.64e-202]"
+      },
+      {
+        "step": 4,
+        "kind": "prune",
+        "dropped_terms": 1,
+        "batch_error_upper": "[8.191951914078939790589194014326444363494061054460143745944757553772320661414150419680848201476720324e-102 +/- 4.05e-202]",
+        "cumulative_error_upper": "[6.596714131302577936528116644383574697593127445896126878020621029661649310866876699956419062966537175e-101 +/- 3.04e-201]"
+      },
+      {
+        "step": 4,
+        "kind": "recenter",
+        "recentered_coefficients": 3,
+        "batch_error_upper": "[4.806586838811894018871614172626657324594236649138521579604384378909297350182345913324437756358620049e-101 +/- 2.86e-201]",
+        "cumulative_error_upper": "[1.140330097011447195539973081701023202218736409503464845762500540857094666104922261328085681932515722e-100 +/- 4.02e-200]"
+      },
+      {
+        "step": 17,
+        "kind": "recenter",
+        "recentered_coefficients": 6,
+        "batch_error_upper": "[4.585796519986776325137240306439351332466363498893782209869705250899094688382577337160810250536233649e-101 +/- 4.44e-202]",
+        "cumulative_error_upper": "[1.598909749010124828053697112344958335465372759392843066749471065947004134943179995044166706986139087e-100 +/- 3.07e-200]"
+      },
+      {
+        "step": 19,
+        "kind": "prune",
+        "dropped_terms": 1,
+        "batch_error_upper": "[8.191951914078939790589194014326444363494061054460143745944757553772320661414150419680848201476720324e-102 +/- 4.05e-202]",
+        "cumulative_error_upper": "[1.680829268150914225959589052488222779100313369937444504208918641484727341557321499240975189000906291e-100 +/- 4.58e-200]"
+      },
+      {
+        "step": 19,
+        "kind": "recenter",
+        "recentered_coefficients": 5,
+        "batch_error_upper": "[6.580558335244928210597967523745300474140851434387493067026199151412785385320342673171678539632678023e-101 +/- 4.24e-201]",
+        "cumulative_error_upper": "[2.338885101675407047019385804862752826514398513376193810911538556626005880089355766558143042964174093e-100 +/- 1.16e-200]"
+      },
+      {
+        "step": 20,
+        "kind": "recenter",
+        "recentered_coefficients": 10,
+        "batch_error_upper": "[7.559645525180686334921715173789073047753114774405417291378199755769650726369778172664743443827721553e-101 +/- 1.69e-201]",
+        "cumulative_error_upper": "[3.094849654193475680511557322241660131289709990816735540049358532202970952726333583824617387346946248e-100 +/- 1.68e-200]"
+      }
+    ],
+    "norm": "Operator norm on the complete ancilla branch column, then projected block",
+    "rule": "Charge sum abs_upper(c) for discarded terms and sum (Re radius + Im radius) for recentered terms, over ALL branches",
+    "propagation": "Unitary suffixes preserve operator norm; final projection and restored global phase do not increase it",
+    "budget_policy": "Keep the entire batch if its upper bound would exceed the budget",
+    "interval_roundoff": "Recenter to exact dyadic midpoints only after charging the complete ball radii; preserve balls if the shared budget would be exceeded",
+    "original_qasm_verified": true,
+    "peak_total_branch_terms": 10,
+    "peak_terms_per_branch": 3,
+    "final_pauli_terms": 3
+  },
+  "coefficient_scope": "Sparse approximate block B_tilde; ||B_original-B_tilde|| <= eta (pruning plus charged recentering)",
+  "core_proportionality_scope": "Fit/check on B_tilde only; final proportionality_pass also includes alpha*eta",
+  "summary": {
+    "benchmark_id": "ising_periodic_n2",
+    "model": "ising",
+    "n_system": "2",
+    "n_terms": "3",
+    "target_lcu_terms": "4",
+    "n_ancilla": "2",
+    "nominal_alpha": "4",
+    "gate_count": "53",
+    "status": "ACCEPT",
+    "success": true,
+    "check_epsilon": "1e-8",
+    "hermiticity_delta": "1e-12",
+    "precision": 100,
+    "execution_mode": "bounded_pruning",
+    "local_summary_count": 2,
+    "summarized_source_gates": 30,
+    "executed_steps": 20,
+    "removed_identity_gates": 5,
+    "summary_compilation_sec": 0.02102641691453755,
+    "symbolic_runtime_sec": 0.039585000020451844,
+    "pruning_threshold": "1e-24",
+    "pruning_budget": "1e-14",
+    "truncation_error_upper": "[3.094849654193475680511557322241660131289709990816735540049358532202970952726333583824617387346946248e-100 +/- 2.01e-200]",
+    "scaled_truncation_error_upper": "[1.237939861677390190076026985322031145385794143532626028523145335405551452133117126915288705176207032e-99 +/- 4.89e-199]",
+    "pruned_terms": 2,
+    "roundoff_error_upper": "[2.931010615911896884699773441955131244019828769727532665130463381127524539498050575431000423317411842e-100 +/- 3.05e-200]",
+    "final_pauli_terms": 3,
+    "peak_total_branch_terms": 10,
+    "peak_terms_per_branch": 3,
+    "hermiticity_runtime_sec": 1.187671500025317,
+    "inferred_alpha": "3.999999999999999734628156064732916755342224539057706583185258224016024591986866833925312930687761669",
+    "residual_norm_upper": "[4.659657552471705688384190744511470124663936562797926287313672895633005492597870820049348273294716367e-16 +/- 4.61e-116]",
+    "residual_threshold": "[5.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000e-9 +/- 6.81e-110]",
+    "operator_error_upper": "[9.319315104943411376768381489022940249327873125595852574627345791266010985195741640111075945206206637e-16 +/- 1.19e-116]",
+    "core_proportionality_pass": true,
+    "proportionality_pass": true,
+    "max_imaginary_coefficient_upper": "[3.094849654193475680511557322241660131289709990816735540049358532202970952726333583824617387346946248e-100 +/- 2.01e-200]",
+    "max_imaginary_coefficient_pauli": "ZZ",
+    "exact_hermiticity_status": "PASS_STRUCTURE",
+    "hermiticity_status": "PASS_STRUCTURE",
+    "runtime_sec": 1.3021757089300081,
+    "tracemalloc_peak_mb": 5.301241874694824,
+    "process_maxrss_mb": 72.140625,
+    "report_path": "cases/ising_periodic_n2.json"
+  }
+}

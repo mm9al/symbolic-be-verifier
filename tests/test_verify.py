@@ -565,6 +565,33 @@ def test_qsp_t3_opaque_verifies_chebyshev_polynomial_on_hermitian_base():
     assert "Normalized B[00] = -3*H + 4*H H H" in format_result(result, show_trace=False)
 
 
+def test_qsp_t3_hadamard_rewrites_but_changes_the_polynomial():
+    path = Path(__file__).parents[1] / "examples" / "qsp_t3_hadamard.qasm"
+    changed_result = verify_qasm_file(
+        path,
+        ancillas=(0, 1),
+        systems=(2,),
+        expected_polynomial="x - 2*x^3",
+        hermitian_base=True,
+        compare_polynomial_only=True,
+    )
+    original_target_result = verify_qasm_file(
+        path,
+        ancillas=(0, 1),
+        systems=(2,),
+        expected_polynomial="4*x^3 - 3*x",
+        hermitian_base=True,
+        compare_polynomial_only=True,
+    )
+
+    expected_polynomial = sp.Symbol("x") - 2 * sp.Symbol("x") ** 3
+
+    assert changed_result.status == PASS
+    assert changed_result.qsp_normalized == WordExpr({("H",): 1, ("H", "H", "H"): -2})
+    assert sp.expand(changed_result.qsp_polynomial - expected_polynomial) == 0
+    assert original_target_result.status == FAIL
+
+
 def test_qsp_polynomial_only_check_does_not_require_base():
     path = Path(__file__).parents[1] / "examples" / "qsp_t3_opaque.qasm"
     result = verify_qasm_file(

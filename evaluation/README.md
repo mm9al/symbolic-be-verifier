@@ -84,7 +84,7 @@ evaluates the Chebyshev roots `x_m = cos((2m - 1)*pi/(2M))` for `m = 1..M`.
 The approximation check computes `beta = <B,e> / ||B||^2` on those grid values
 and reports the error for `beta*B(x) - exp(-i*x*t)`. The `approx_beta` CSV
 field records the fitted scale. QSP angles, coefficient propagation, fitted
-scale, and grid evaluation use Arb/Acb balls with at least 60 decimal digits
+scale, and grid evaluation use Arb/Acb balls with at least 100 decimal digits by default
 (large block encodings automatically use two digits per system qubit); the reported
 maximum error is a rigorous upper bound. Generated physical QSP rotations
 retain all 17 meaningful binary64 digits supplied by pyqsp.

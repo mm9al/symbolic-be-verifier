@@ -1,0 +1,61 @@
+OPENQASM 2.0;
+include "qelib1.inc";
+qreg q[4];
+// PennyLane PrepSelPrep: ising_periodic_n2
+// target H = Z_0 Z_1 + Z_1 Z_0 + X_0 + X_1
+// PREPARE
+ry(1.0471975511965976) q[0];
+ry(0.61547970867038726) q[1];
+cx q[0], q[1];
+ry(0.61547970867038726) q[1];
+cx q[0], q[1];
+// SELECT
+x q[0];
+x q[1];
+rz(0) q[0];
+cx q[0], q[1];
+rz(-0) q[1];
+cx q[0], q[1];
+rz(0) q[1];
+cx q[1], q[3];
+tdg q[3];
+cx q[0], q[3];
+t q[3];
+cx q[1], q[3];
+tdg q[3];
+cx q[0], q[3];
+t q[3];
+t q[1];
+cx q[0], q[1];
+h q[3];
+t q[0];
+tdg q[1];
+cx q[0], q[1];
+h q[3];
+cx q[1], q[2];
+tdg q[2];
+cx q[0], q[2];
+t q[2];
+cx q[1], q[2];
+tdg q[2];
+cx q[0], q[2];
+t q[2];
+t q[1];
+cx q[0], q[1];
+h q[2];
+t q[0];
+tdg q[1];
+cx q[0], q[1];
+h q[2];
+x q[0];
+x q[1];
+rz(0) q[1];
+cx q[1], q[2];
+rz(0) q[0];
+cx q[0], q[3];
+// PREPARE dagger
+cx q[0], q[1];
+ry(-0.61547970867038726) q[1];
+cx q[0], q[1];
+ry(-0.61547970867038726) q[1];
+ry(-1.0471975511965976) q[0];

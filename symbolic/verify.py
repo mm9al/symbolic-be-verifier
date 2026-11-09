@@ -31,8 +31,8 @@ PASS_UP_TO_SCALE = "PASS_UP_TO_SCALE"
 FAIL = "FAIL"
 FAIL_GARBAGE = "FAIL_GARBAGE"
 DEFAULT_TOLERANCE = 1e-8
-DEFAULT_BLOCK_ENCODING_CHECK_PRECISION = 60
-DEFAULT_QSP_CALCULATION_PRECISION = 60
+DEFAULT_BLOCK_ENCODING_CHECK_PRECISION = 100
+DEFAULT_QSP_CALCULATION_PRECISION = 100
 BALL_PRECISION_DIGITS_PER_SYSTEM_QUBIT = 2
 DEFAULT_MAX_APPROXIMATION_GRID_POINTS = 10_000_000
 
@@ -297,6 +297,7 @@ def verify_qasm_file(
     base: str | OpExpr | None = None,
     expected_polynomial: str | sp.Expr | None = None,
     extract_qsp_polynomial: bool = False,
+    check_qsp_canonical_form: bool = True,
     hermitian_base: bool = False,
     compare_polynomial_only: bool = False,
     target_exp_tau: float | None = None,
@@ -343,7 +344,7 @@ def verify_qasm_file(
         or any(_is_qsp_word_gate(gate.name) for gate in gates)
         else "op"
     )
-    if expression_kind == "word":
+    if expression_kind == "word" and check_qsp_canonical_form:
         _validate_qsp_canonical_form(gates, ancillas=ancilla_qubits, systems=system_qubits)
     result = run_circuit(
         gates,
@@ -1320,6 +1321,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     parser.add_argument("--hermitian-base", action="store_true", help="Rewrite Hd atoms to H before QSP polynomial evaluation.")
     parser.add_argument(
+        "--skip-qsp-canonical-check",
+        action="store_true",
+        help=(
+            "Skip QSP canonical-form validation for experimental imports. "
+            "This does not extend the zero/nonzero block-ancilla semantics."
+        ),
+    )
+    parser.add_argument(
         "--compare-polynomial-only",
         action="store_true",
         help="Compare QSP polynomials directly instead of evaluating them on --base.",
@@ -1365,6 +1374,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         keep_trace=args.trace,
         base=args.base,
         expected_polynomial=args.expected_polynomial,
+        check_qsp_canonical_form=not args.skip_qsp_canonical_check,
         hermitian_base=args.hermitian_base,
         compare_polynomial_only=args.compare_polynomial_only,
         target_exp_tau=args.target_exp_tau,

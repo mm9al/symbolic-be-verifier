@@ -1,0 +1,64 @@
+{
+  "manifest_sha256": "5d0638521c012d7001dfac29f319caba05875e53482ac581e4cd2362c7601e81",
+  "command": [
+    "evaluation/pennylane/run_block_encoding.py",
+    "--sizes",
+    "2..10,16",
+    "--bounded-pruning",
+    "--pruning-threshold",
+    "1e-24",
+    "--pruning-budget",
+    "1e-14",
+    "--block-encoding-epsilon",
+    "1e-8",
+    "--hermiticity-delta",
+    "1e-12",
+    "--precision",
+    "100",
+    "--timeout-sec",
+    "1800"
+  ],
+  "python": "3.10.16",
+  "platform": "macOS-13.2-arm64-arm-64bit",
+  "block_encoding_epsilon": "1e-8",
+  "execution_mode": "bounded_pruning",
+  "bounded_pruning": {
+    "threshold": "1e-24",
+    "budget": "1e-14",
+    "charged_ball_recentering": true,
+    "acceptance_includes_propagation_error": true
+  },
+  "hermiticity_policy": {
+    "delta": "1e-12",
+    "criterion": "Exact Hermiticity OR max_P |Im(c_P)| < delta on the final unscaled block B",
+    "rigorous_upper_bounds": true,
+    "comparison": "strictly less than",
+    "exact_status_recorded_separately": true
+  },
+  "packages": {
+    "sympy": "1.14.0",
+    "python-flint": "0.9.0"
+  },
+  "sources_sha256": {
+    "evaluation/pennylane/run_block_encoding.py": "00f6e18d38d3d39016e2ee3ef2d6e35626d06614885a9bcef696d5973422ddda",
+    "evaluation/pennylane/common.py": "c0d416ebe8c7662f6e045b807f4b004b4c554c01c87dd93cf4ab15a065b6a821",
+    "symbolic/__init__.py": "cb7441621bf00101937dd765be8f0cfca80a7d44bbf4bb32bf737c09b59a961f",
+    "symbolic/branch_state.py": "8f3037fe62f1508e5ae37abaf600cc8ffa4d2b3700b7748387207445b32e5568",
+    "symbolic/expr.py": "a5f4e2dd8d404380cb151c5eb839d6cf29cc97193f04408a40980221fbb1c396",
+    "symbolic/interval.py": "df3b01dcd958f076804bddce6a24b55f3979fc0fdfafaf486a53494496aa2fd4",
+    "symbolic/profile.py": "118cf960cb93847edd63c91bf53acf5c96f5868120722015a062a52c5dcc81c9",
+    "symbolic/qasm_parser.py": "0048f8c8bb80788e2f8760b1620fb131dc59898da27b6ff50f036e0f1438a735",
+    "symbolic/qsp.py": "42a862c669225d44ad2458226070bbfc376bc6357eeaac1d9b53bb41e2a4b7ac",
+    "symbolic/scalar.py": "b5bf397d475f0f065f512da97f7b285f30e3a8e52878f16de66d5113c5b6e3c8",
+    "symbolic/verify.py": "e0a9b815d72556823ec529499974148f96a0dadffac06de43a5291956d3e196a",
+    "symbolic/word_expr.py": "e84f06ff2b4d5d5193e5654e944966b60e61f406c3269eb0bf1d1e94c50372d2",
+    "evaluation/pennylane/local_summaries.py": "5c42e07778e44598bf73b031309101a0b93e69295acc447913f5ffa786950f55",
+    "evaluation/pennylane/bounded_pruning.py": "9163b21712e9a37f8d6ac576ed6bf519d58fcab96102cc70fd44a36f59c1e2d7"
+  },
+  "timing_scope": "Per-case TASK 1 wall time, including input checks, symbolic execution, alpha/residual and Hermiticity; excludes generation and process startup",
+  "certificate_scope": "Exact serialized decimal QASM with the recorded unconditional global phase",
+  "source_snapshots": {
+    "evaluation/pennylane/run_block_encoding.py": "source_snapshot/run_block_encoding.py",
+    "evaluation/pennylane/bounded_pruning.py": "source_snapshot/bounded_pruning.py"
+  }
+}

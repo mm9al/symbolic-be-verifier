@@ -71,7 +71,11 @@ class WordExpr:
         return any(atom in atom_set for word in self.terms for atom in word)
 
     def replace_atom(self, old: Atom, new: Atom) -> "WordExpr":
-        return WordExpr({tuple(new if atom == old else atom for atom in word): coeff for word, coeff in self.terms.items()})
+        terms: Dict[Word, Any] = {}
+        for word, coeff in self.terms.items():
+            replaced = tuple(new if atom == old else atom for atom in word)
+            terms[replaced] = scalar_add(terms.get(replaced, sp.Integer(0)), coeff)
+        return WordExpr(terms)
 
     def __add__(self, other: "WordExpr") -> "WordExpr":
         terms = dict(self.terms)

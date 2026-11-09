@@ -1,0 +1,37 @@
+{
+  "default_delta": "1e-12",
+  "metric": "max_P |Im(c_P)| of final block B, after restoring global phase and before alpha scaling",
+  "comparison": "rigorous upper bound strictly less than delta",
+  "selection_rule": "Next power of ten above 1000 times the maximum observed upper bound",
+  "observed_maximum_upper": "[5.580792019780138948880652715465374171287711586989579243134487824291167439251246656240470999387262250e-16 +/- 3.95e-116]",
+  "measurements": [
+    {
+      "n": 2,
+      "precision": 100,
+      "max_imaginary_coefficient_upper": "[7.140000009791106587350105336018576350868255880716388062506581187903834588541985811891178850049161514e-99 +/- 4.17e-200]",
+      "pauli": "IZ",
+      "qasm_sha256": "165320f217ae25985ae1c0baa16f9daa22157f924bc7c5c54e1a7fc84e76a82d",
+      "source_report": "evaluation/pennylane/results/cases/ising_periodic_n2.json",
+      "source_report_sha256": "d92ceae28d4dd976633d47971b1b099005f5eb8b41038d0cfd9254cda0128d1b"
+    },
+    {
+      "n": 3,
+      "precision": 100,
+      "max_imaginary_coefficient_upper": "[4.828232751248652377327450385088319041346556647529408869177492880200000241161286098270441662092899933e-16 +/- 3.03e-116]",
+      "pauli": "IZI",
+      "qasm_sha256": "091491ed369b37f4525804e27867fff02abadfbc71906306d2424f51e1dd45e9",
+      "source_report": "evaluation/pennylane/results/cases/ising_periodic_n3.json",
+      "source_report_sha256": "00f91f502e916d1e113c54543f12ab27a0115e5793d804692b21b397059e1789"
+    },
+    {
+      "n": 4,
+      "precision": 100,
+      "max_imaginary_coefficient_upper": "[5.580792019780138948880652715465374171287711586989579243134487824291167439251246656240470999387262250e-16 +/- 3.32e-116]",
+      "pauli": "ZZIZ",
+      "qasm_sha256": "2171030eb7aab375897bc88d2c23843ad67507e6540acafae075ed60f72d5c97",
+      "source": "Fresh concrete QASM execution with global phase restored; no tracemalloc"
+    }
+  ],
+  "coverage": "n=2,3,4 only; no calibration measurements for n=5..16 yet",
+  "policy": "Fixed explicit threshold; no per-case automatic relaxation; exact status retained separately"
+}

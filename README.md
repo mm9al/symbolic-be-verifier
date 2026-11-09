@@ -46,6 +46,8 @@ Support a small OpenQASM subset:
 - h
 - s
 - sdg
+- t
+- tdg
 - x
 - z
 - rx
@@ -53,9 +55,16 @@ Support a small OpenQASM subset:
 - rz
 - cx
 - cz
+- cy
 
 Rotation gates support symbolic and exact angles such as `theta`, `-theta`,
 `pi`, `pi/2`, `0.5*pi`, and `2*pi`.
+
+`t` and `tdg` use exact algebraic coefficients, including their absolute phase,
+on either ancillas or systems. `cy` supports distinct known control/target
+qubits in either register, including both-system operands in concrete operator
+mode. QSP word mode still rejects explicit system operations and retains its
+canonical input checks.
 
 ## Single-Circuit Block-Encoding Verification
 
@@ -191,7 +200,7 @@ Verification results:
 Numeric coefficient comparisons use a default absolute tolerance of `1e-8`.
 Override it with `--tolerance` when running `symbolic.verify`. Decimal QASM
 parameters and every inexact coefficient derived from them are propagated with
-python-flint Arb/Acb ball arithmetic (at least 60 decimal digits by default,
+python-flint Arb/Acb ball arithmetic (at least 100 decimal digits by default,
 automatically raised to two digits per system qubit for large circuits). A numeric
 comparison passes only when the rigorous upper bound on the residual is no
 larger than the rigorous lower bound on the acceptance threshold. If the two
@@ -238,6 +247,13 @@ every block ancilla, use all of them as controls, and restore every `x` in
 reverse order. The verifier rejects direct gates that distinguish individual
 nonzero block states and controls that cover only part of the block register.
 
+Canonical-form validation is enabled by default. For experimental imports,
+pass `--skip-qsp-canonical-check`, or call
+`verify_qasm_file(..., check_qsp_canonical_form=False)` in Python. This only
+skips input validation; gate support and the zero/nonzero block abstraction
+are unchanged. For multiple block ancillas, a result on noncanonical input
+requires a separate justification that the abstraction represents that circuit.
+
 The QASM files still keep pyqsp phases separate from physical OpenQASM rotation
 angles. They first convert pyqsp's Wx phases to QSVT projector phases, then
 write the physical `rz(theta_rz)` angle:
@@ -262,11 +278,11 @@ in `H` only, i.e. a linear combination of `I`, `H`, `H H`, `H H H`, and so on.
 If any `A`, `G`, `C`, adjoint garbage block, or unreduced `Hd` remains, the
 check fails before comparing coefficients with the target polynomial.
 
-QSP verification uses Arb/Acb balls with a 60-decimal-digit minimum for parsing
+QSP verification uses Arb/Acb balls with a 100-decimal-digit minimum for parsing
 physical QASM rotation angles, trigonometric coefficients, coefficient
 propagation, and the final Hamiltonian-simulation approximation grid. This
-avoids severe monomial-basis cancellation at larger degrees while retaining a
-rounding-error enclosure. Override the minimum with
+retains a rounding-error enclosure through high-degree coefficient propagation
+and grid evaluation. Override the minimum with
 `--qsp-calculation-precision` when deliberately testing another precision.
 Generated physical QSP rotations contain 17 significant digits, matching the
 meaningful precision available from pyqsp's binary64 phase synthesis; the

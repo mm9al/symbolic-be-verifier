@@ -1,0 +1,92 @@
+{
+  "benchmark_id": "ising_periodic_n2",
+  "model": "ising",
+  "graph": "periodic",
+  "n_system": 2,
+  "target_lcu_terms": 4,
+  "n_terms": 3,
+  "n_ancilla": 2,
+  "ancillas": [
+    0,
+    1
+  ],
+  "systems": [
+    2,
+    3
+  ],
+  "target_H": "Z_0 Z_1 + Z_1 Z_0 + X_0 + X_1",
+  "independent_terms": [
+    {
+      "coefficient": "1",
+      "paulis": {
+        "0": "Z",
+        "1": "Z"
+      }
+    },
+    {
+      "coefficient": "1",
+      "paulis": {
+        "1": "Z",
+        "0": "Z"
+      }
+    },
+    {
+      "coefficient": "1",
+      "paulis": {
+        "0": "X"
+      }
+    },
+    {
+      "coefficient": "1",
+      "paulis": {
+        "1": "X"
+      }
+    }
+  ],
+  "nominal_alpha": "4",
+  "source_coefficients": [
+    "2",
+    "1",
+    "1"
+  ],
+  "source_operators": [
+    "Z(2) @ Z(3)",
+    "X(2)",
+    "X(3)"
+  ],
+  "gate_count": 53,
+  "gate_counts": {
+    "ry": 6,
+    "cx": 20,
+    "x": 4,
+    "rz": 5,
+    "tdg": 6,
+    "t": 8,
+    "h": 4
+  },
+  "global_phase_gamma": "0",
+  "decimal_angle_digits": 17,
+  "added_workspace_wires": 0,
+  "select_reconstructed": false,
+  "pi_snapping": false,
+  "numerical_crosscheck": {
+    "status": "PASS",
+    "threshold": 1e-10,
+    "export_max_abs": 3.3336780670064826e-16,
+    "source_block_max_abs": 1.1102230246251565e-16
+  },
+  "generation_sec": 0.053736334084533155,
+  "python": "3.12.9",
+  "packages": {
+    "pennylane": "0.45.1",
+    "numpy": "2.5.4"
+  },
+  "generator_sources_sha256": {
+    "common.py": "c0d416ebe8c7662f6e045b807f4b004b4c554c01c87dd93cf4ab15a065b6a821",
+    "generate_benchmarks.py": "fdba451f9f7ec1121178de1e5aae99118112caddd992327134feb1d8d0acee18"
+  },
+  "files_sha256": {
+    "block_encoding.qasm": "165320f217ae25985ae1c0baa16f9daa22157f924bc7c5c54e1a7fc84e76a82d",
+    "structure.json": "611f4f5e1d92d22a3b6670afc2ad50543a6a0d47316e346b893049606c7d51ef"
+  }
+}
